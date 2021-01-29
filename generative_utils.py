@@ -4,10 +4,10 @@ import torch
 import torch.nn as nn
 
 from model import *
-from metrics import *
+from utils import *
 from losses import *
 
-adv_loss = nn.BCELoss()
+adv_loss = bce_loss #nn.BCELoss() #
 
 def get_distance_matrix(sample,neighbors_dim=0,eps=1e-24):
 	if not neighbors_dim==1:
@@ -24,7 +24,6 @@ def get_distance_matrix(sample,neighbors_dim=0,eps=1e-24):
 		norms = norms.expand(s, sample.size(2), n, n) + norms.expand(s, sample.size(2), n, n).transpose(2,3)
 		dsquared=norms-2*torch.matmul(sample.transpose(1,2),sample.transpose(1,2).transpose(2,3))
 	distance = torch.sqrt(torch.abs(dsquared)+eps)
-	distance = 15*distance 
 	if not neighbors_dim==1:
 		distance=distance.transpose(0,1)
 	if len(sample.size())==4:
@@ -60,9 +59,9 @@ def get_features(sample,neighbors_dim,previous_sequence=None):
 	distance = get_distance_matrix(sample,1)
 	heading = get_heading(sample,prev_sample=previous_sequence)
 	if len(sample.size())==3:
-		heading = heading.repeat(1,n).view(shape)
+		heading = heading.unsqueeze(-1).expand(shape)
 	else:
-		heading = heading.repeat(1, 1, n).view(shape)
+		heading = heading.unsqueeze(-1).expand(shape)
 	bearing=bearing-heading
 	bearing = torch.where(distance.data==distance.data.min(), torch.zeros_like(bearing), bearing)
 	if len(sample.size())==3:
@@ -95,74 +94,80 @@ def get_heading(sample,prev_sample=None):
 	return heading
 
 def discriminator_step(b, batch, generator, discriminator, optimizer_d, eps=1e-06):
-	optimizer_d.zero_grad()
-	batch = [tensor.to(device) for tensor in batch]
-	sequence, target, distance_matrix, bearing_matrix, heading_matrix, ip_mask, op_mask, ped_count = batch
-	sequence, target, distance_matrix, bearing_matrix, heading_matrix = sequence.float(), target.float(), distance_matrix.float(), bearing_matrix.float(), heading_matrix.float()
-	ip_mask, op_mask = ip_mask.bool(), op_mask.bool()
-	out_g = generator(sequence, distance_matrix, bearing_matrix, heading_matrix, ip_mask, op_mask)
-	op_mask_ = op_mask.unsqueeze(-1).expand_as(out_g)
-	out_g.data.masked_fill_(mask=~op_mask_, value=float(0))
-	target.data.masked_fill_(mask=~op_mask_, value=float(0))
+	discriminator.zero_grad()
+	if hasattr(discriminator, 'spatial_attn') and discriminator.spatial_attn.domain.requires_grad is False:  discriminator.spatial_attn.domain.data.copy_(generator.spatial_attention.domain.data)	
+	batch = get_batch(batch)
+	sequence,target,dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask,pedestrians, scene_context, batch_mean, batch_var, frame_id = batch
+	out_g, target, sequence, ped_count, distance_matrix, bearing_matrix, heading_matrix = predict(batch, generator, num_traj=1)
+	out_g=out_g[0]
 	ade_g = ade(out_g, target, ped_count)
 	fde_g = fde(out_g, target, ped_count)
-	input_d = torch.cat([sequence, out_g], dim=2)
-	input_d_real = torch.cat([sequence, target], dim=2)
 	target_d, target_b, target_h = get_features(out_g, 1)
 	target_d_real, target_b_real, target_h_real = get_features(target, 1)
+	#batch_mean, batch_var = batch_mean.squeeze(1), batch_var.squeeze(1)
+	batch_mean, batch_var = batch_mean.unsqueeze(1).expand_as(out_g), batch_var.unsqueeze(1).expand_as(out_g)
+	out_g = out_g-batch_mean
+	out_g = out_g/batch_var
+	target = target-batch_mean
+	target =target/batch_var
+	input_d = torch.cat([sequence, out_g], dim=2)
+	input_d_real = torch.cat([sequence, target], dim=2)
 	dmat, bmat, hmat = torch.cat([distance_matrix, target_d], dim=2), torch.cat([bearing_matrix, target_b], dim=2), torch.cat([heading_matrix, target_h], dim=2)
 	dmat_real, bmat_real, hmat_real = torch.cat([distance_matrix, target_d_real], dim=2), torch.cat([bearing_matrix, target_b_real], dim=2), torch.cat([heading_matrix, target_h_real], dim=2)
+	#scores_fake = discriminator(out_g, target_d, target_b, target_h, ip_mask, op_mask)
 	scores_fake = discriminator(input_d, dmat, bmat, hmat, ip_mask, op_mask)
-	scores_real = discriminator(input_d_real, dmat_real, bmat_real, hmat_real, ip_mask, op_mask)
-	assert(not(torch.isnan(scores_real).any()))
-	assert(not(torch.isnan(scores_fake).any()))
-	valid = Variable(torch.ones_like(scores_real), requires_grad=False).uniform_(0.7, 1.0)
-	fake = Variable(torch.zeros_like(scores_real), requires_grad=False).uniform_(0.0, 0.3) 
-	real_loss = adv_loss(scores_real+eps, valid)
+	fake = Variable(torch.zeros_like(scores_fake), requires_grad=False).uniform_(0.0, 0.3)
 	fake_loss = adv_loss(scores_fake+eps, fake)
-	loss = (real_loss+fake_loss)/2 
-	assert(not(torch.isnan(loss).any()))
-	assert(not(torch.isnan(ade_g).any()))
-	total_loss=loss+ade_g
-	assert(not(torch.isnan(total_loss).any()))
+	#scores_real = discriminator(target, target_d_real, target_b_real, target_h_real, ip_mask, op_mask)
+	scores_real = discriminator(input_d_real, dmat_real, bmat_real, hmat_real, ip_mask, op_mask)
+	valid = Variable(torch.ones_like(scores_real), requires_grad=False).uniform_(0.7, 1.0)
+	real_loss = adv_loss(scores_real+eps, valid)
+	loss = real_loss+fake_loss
+	#loss = loss/2
+	total_loss = loss+ade_g
 	total_loss.backward()
+	#for param in list(discriminator.named_parameters()): print(f"{param[0]}: {param[1].grad.max()}")
+	#for param in list(discriminator.named_parameters()): 
+	#	if (not 'domain' in param[0]) and (param[1].grad.max())==0: print(f"[D]\t{param[0]} has zero grad!") #assert(not(param[1].grad.max()==0)), f"{param[0]} has zero grad!"
 	optimizer_d.step()
 	return loss
 
-def generator_step(b, batch, generator, discriminator, optimizer_g, best_k, weight_sim):
-	optimizer_g.zero_grad()
-	batch = [tensor.to(device) for tensor in batch]
-	sequence, target, distance_matrix, bearing_matrix, heading_matrix, ip_mask, op_mask, ped_count = batch
-	sequence, target, distance_matrix, bearing_matrix, heading_matrix = sequence.float(), target.float(), distance_matrix.float(), bearing_matrix.float(), heading_matrix.float()
-	ip_mask, op_mask = ip_mask.bool(), op_mask.bool()
+def generator_step(b, batch, generator, discriminator=None, optimizer_g=None, best_k=None, weight_sim=None, train=True):
+	if train: 
+		generator.zero_grad()
+		if hasattr(discriminator, 'spatial_attn') and discriminator.spatial_attn.domain.requires_grad is False:  discriminator.spatial_attn.domain.data.copy_(generator.spatial_attention.domain.data)  
 	min_ade=Variable(torch.FloatTensor(1), requires_grad=True).to(device).fill_(1000) 
-	predictions = []
+	batch = get_batch(batch)
+	sequence,target,dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask,pedestrians, scene_context, batch_mean, batch_var, frame_id = batch
+	out_g, target, sequence, ped_count, distance_matrix, bearing_matrix, heading_matrix = predict(batch, generator, num_traj=best_k)
 	for k in range(best_k):
-		out_g = generator(sequence, distance_matrix, bearing_matrix, heading_matrix, ip_mask, op_mask)
-		op_mask_ = op_mask.unsqueeze(-1).expand_as(out_g)
-		out_g.data.masked_fill_(mask=~op_mask_, value=float(0))
-		predictions+=[out_g]
-		target.data.masked_fill_(mask=~op_mask_, value=float(0))
-		ade_g = ade(out_g, target, ped_count)
-		fde_g = fde(out_g, target, ped_count)
+		ade_g = ade(out_g[k], target, ped_count)
+		fde_g = fde(out_g[k], target, ped_count)
 		if ade_g.item()<min_ade.item():
 			min_ade=ade_g
 			fde_ = fde_g 
-			final_pred = out_g
-	if not (weight_sim==0):
-		predictions = torch.stack(predictions, dim=0)
+			final_pred = out_g[k]
+	if train and not (weight_sim==0):
+		predictions = torch.stack(out_g, dim=0)
 		similarity_metric = traj_similarity(predictions, op_mask)
-	input_d = torch.cat([sequence, final_pred], dim=2)
-	target_d, target_b, target_h = get_features(final_pred, 1)
-	dmat, bmat, hmat = torch.cat([distance_matrix, target_d], dim=2), torch.cat([bearing_matrix, target_b], dim=2), torch.cat([heading_matrix, target_h], dim=2)
-	scores_fake = discriminator(input_d, dmat, bmat, hmat, ip_mask, op_mask)
-	valid = Variable(torch.ones_like(scores_fake), requires_grad=False).uniform_(0.0, 0.3)
-	discriminator_loss = adv_loss(scores_fake, valid)
-	loss = min_ade+discriminator_loss
-	if not (weight_sim==0):
-		loss = loss+weight_sim*similarity_metric 
-	loss.backward()
-	optimizer_g.step()
+	if train:
+		target_d, target_b, target_h = get_features(final_pred, 1)
+		batch_mean, batch_var = batch_mean.unsqueeze(1).expand_as(final_pred), batch_var.unsqueeze(1).expand_as(final_pred)	
+		final_pred = final_pred-batch_mean
+		final_pred = final_pred/batch_var
+		input_d = torch.cat([sequence, final_pred], dim=2)
+		dmat, bmat, hmat = torch.cat([distance_matrix, target_d], dim=2), torch.cat([bearing_matrix, target_b], dim=2), torch.cat([heading_matrix, target_h], dim=2)
+		scores_fake = discriminator(input_d, dmat, bmat, hmat, ip_mask, op_mask)
+		valid = Variable(torch.ones_like(scores_fake), requires_grad=False).uniform_(0.0, 0.3)
+		discriminator_loss = adv_loss(scores_fake, valid)
+		loss = min_ade+discriminator_loss
+		if not (weight_sim==0):
+			loss = loss+weight_sim*similarity_metric 
+		loss.backward()
+		#for param in list(discriminator.named_parameters()): 
+		#	if (not 'domain' in param[0]) and param[1].grad.max()==0: print(f"[G]\t{param[0]} has zero grad!") #assert(not(param[1].grad.max()==0)), f"{param[0]} has zero grad!"
+		optimizer_g.step()
+	if not train: discriminator_loss=None
 	return discriminator_loss,  min_ade, fde_
 
 def check_accuracy(loader, generator, discriminator, plot_traj=False, num_traj=1):
@@ -172,26 +177,9 @@ def check_accuracy(loader, generator, discriminator, plot_traj=False, num_traj=1
 	d_loss = float(0)
 	with torch.no_grad():
 		for b, batch in enumerate(loader):
-			batch = [tensor.to(device) for tensor in batch]
-			sequence, target, distance_matrix, bearing_matrix, heading_matrix, ip_mask, op_mask, ped_count = batch
-			sequence, target, distance_matrix, bearing_matrix, heading_matrix = sequence.float(), target.float(), distance_matrix.float(), bearing_matrix.float(), heading_matrix.float()
-			ip_mask, op_mask = ip_mask.bool(), op_mask.bool()
-			ade_g = []
-			fde_g = []
-			traj = []
-			for i in range(num_traj):
-				out_g = generator(sequence, distance_matrix, bearing_matrix, heading_matrix, ip_mask, op_mask)
-				op_mask_ = op_mask.unsqueeze(-1).expand_as(out_g)
-				out_g.data.masked_fill_(mask=~op_mask_, value=float(0))
-				target.data.masked_fill_(mask=~op_mask_, value=float(0))
-				traj+=[out_g]
-				ade_g+=[ade(out_g, target, ped_count)]
-				fde_g+=[fde(out_g, target, ped_count)]
-			ade_b = min(ade_g)
-			test_ade+=ade_b 
-			for ix, ade_ in enumerate(ade_g):
-				if ade_ == ade_b: fde_b=fde_g[ix]
-			test_fde+=fde_b
+			_, min_ade, fde = generator_step(b, batch, generator, best_k=num_traj, train=False)
+			test_ade+=min_ade
+			test_fde+=fde
 		test_ade/=(b+1)
 		test_fde/=(b+1)
 	return test_ade, test_fde

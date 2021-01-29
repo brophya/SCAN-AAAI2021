@@ -40,7 +40,7 @@ def traj_similarity(predictions, mask, eps=1e-16, k=1):
 	norms = norms.expand(num_traj, prediction_length, best_k, best_k) + norms.expand(num_traj, prediction_length, best_k, best_k).transpose(2,3)
 	dsquared = norms - 2*torch.matmul(predictions.transpose(1,2), predictions.transpose(1,2).transpose(2,3))
 	distance = torch.sqrt(torch.abs(dsquared)+eps)
-	distance=15*distance
+#	distance=15*distance
 	distance = distance**2
 	S = torch.exp(-k*distance+eps)
 	# sum all non diagonal elements??
