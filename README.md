@@ -1,5 +1,11 @@
 # SCAN: A Spatial Context Attentive Network for Joint Multi-Agent Intent Prediction
 
+Code for the paper
+
+[SCAN: A Spatial Context Attentive Network for Joint Multi-Agent Intent Prediction](https://arxiv.org/abs/2102.00109)
+Jasmine Sekhon, Cody Fleming 
+Accepted at AAAI-2021 
+
 **SCAN** is a **S**patial **C**ontext **A**ttentive **N**etwork that can jointly predict trajectories for all pedestrians in a scene over a future time window by attending to spatial contexts experienced by them individually over an observed time window. 
 
 ## Model Architecture
