@@ -28,14 +28,28 @@ Human motion is multimodal, and often there is no single correct future trajecto
 
 We train and evaluate our models on five publicly available datasets: ETH, HOTEL, UNIV, ZARA1, ZARA2. We follow a leave-one-out process where we train on four of the five models and test on the fifth. The exact training, validation, test datasets we use are in directory data/ . For each pedestrian in a given frame, our model observes the trajectory for 8 time steps (3.2 seconds) and predicts intent over future 8 time steps (3.2 seconds) jointly for all pedestrians in the scene.
 
-There are 5 available models to choose from: 
+There are several available models to choose from, main variants being:
 1. `vanilla`, which is a vanilla LSTM-based autoencoder,
 2. `temporal`, which is an LSTM-based autoencoder with temporal attention in the decoder, 
 3. `spatial`, which is referred to in the paper as **vanillaSCAN**, and is an LSTM-based autoencoder with spatial attention mechanism, 
 4. `spatial_temporal`, which is our proposed model **SCAN**, 
 5. `generative_spatial_temporal`, which is **GenerativeSCAN**, a GAN-based SCAN capable of predicting multiple socially plausible trajectories. 
 
-To train our models with our chosen hyperparameters, simply edit `--dset_name` and `model_type` arguments in the `train.sh` script. All other arguments are specified and explained in `arguments.py`. All our results are reported on `seed=100` in the `train.py` file. 
+<em> in progress: SCAN with scene context trained to extract scene relevant features from the static scene image pertaining to a dataset, using pretrained resnet-18 model </em>
 
-To evaluate trained models, edit `--dset_name` and `model_type` arguments in the `evaluate.sh` script. `plot_trajectories.sh` plots trajectories as gifs/density plots for **GenerativeSCAN**. 
+To train **SCAN**, i.e., the deterministic model with our chosen hyperparameters, simply edit `--dset_name` and `model_type` arguments in the `scripts/script_train_deterministic.sh` script. 
+All other arguments are specified and explained in `arguments.py`. 
+
+To train **GenerativeSCAN** with our chosen hyperparameters, similarly edit `--dset_name` and `model_type` arguments in the `scripts/script_train_generative.sh` script. 
+All other arguments are specified and explained in `arguments.py`.
+
+To evaluate trained models for **SCAN**, i.e., the deterministic model with our chosen hyperparameters on all of the datasets, run
+
+```
+sh scripts/script_evaluate_deterministic.sh 
+```
+
+
+
+
 

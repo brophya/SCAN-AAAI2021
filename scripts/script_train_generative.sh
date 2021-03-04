@@ -1,0 +1,25 @@
+python -u train_generative.py \
+--dset_name univ \
+--obs_len 8 \
+--pred_len 12 \
+--delim "\t" \
+--model_type generative_spatial_temporal \
+--scheduler \
+--domain_parameter 5 \
+--batch_size 32 \
+--noise_type gaussian \
+--num_epochs 200 \
+--eval_batch_size 128 \
+--best_k 1 \
+--l2_loss_weight 1 \
+--num_traj 20 \
+--weight_sim 0 \
+--lr_g 1e-03 \
+--lr_d 1e-03 \
+--delta_bearing 30 \
+--delta_heading 30 \
+--encoder_dim 32 \
+--decoder_dim 32 \
+--attention_dim 32 \
+--embedding_dim 16 \
+--delta_heading 30 \

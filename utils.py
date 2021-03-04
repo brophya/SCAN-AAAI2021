@@ -4,6 +4,8 @@ import math
 import numpy as np 
 import pandas as pd 
 import random
+import torch.nn as nn
+import torch.nn.functional as F
 from torch.autograd import Variable
 import matplotlib
 matplotlib.use("agg")
@@ -13,15 +15,26 @@ from torchvision import transforms as transforms
 from PIL import Image 
 import seaborn as sns
 
+from tqdm import tqdm
+
 rad2deg = 180/math.pi
+deg2rad = math.pi/180
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def ade(pred, targets, num_peds, eps=1e-14):
-    num_peds = num_peds.sum()
-    dist=torch.sqrt(((pred-targets)**2).sum(dim=-1)+eps)
-    ade=dist.sum()/(num_peds*pred.size(2))
-    return ade 
+eps=1e-14
+
+def round_(tensor, digits=2):
+	rounded=(tensor*10**digits).round()/(10**digits)
+	return rounded
+
+def eval_metrics(pred, targets, num_peds, eps=1e-14):
+    num_peds = num_peds.sum() # sum across all pedestrians in all abtches
+    dist=torch.sqrt(((pred-targets)**2).sum(dim=-1)+eps) 
+    fde = dist[:,:,-1].sum()/num_peds
+    dist = dist.sum(dim=-1)/(dist.size(-1))
+    ade = dist.sum()/(num_peds)
+    return ade , fde
 
 def fde(pred, targets, num_peds, eps=1e-14):
     num_peds = num_peds.sum()
@@ -44,6 +57,7 @@ def preprocess_image(fname):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
     img = preprocess(img)
+    #img=torch.zeros(224, 224)
     return img 
 
 def evaluate_model(model, testloader):
@@ -52,42 +66,44 @@ def evaluate_model(model, testloader):
     model.eval()
     for b, batch in enumerate(testloader):
         pred, target,sequence, pedestrians = predict(batch,model)
-        ade_b = ade(pred, target, pedestrians)
-        fde_b = fde(pred, target, pedestrians)
+        ade_b, fde_b = eval_metrics(pred, target, pedestrians, eps=0)
         test_ade+=ade_b.item()
         test_fde+=fde_b.item()
     test_ade/=(b+1)
     test_fde/=(b+1)
-    return test_ade, test_fde 
+    return test_ade, test_fde
 
-def predict(batch, net, num_traj=None):
+def predict(batch, net):
     batch = get_batch(batch)
-    sequence,target,dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask,pedestrians, scene_context, batch_mean, batch_var, frame_id = batch 
+    sequence,target,dist_matrix,bearing_matrix,heading_matrix,\
+    ip_mask,op_mask,pedestrians, scene_context, \
+    mean, var = batch
     target_mask = op_mask.unsqueeze(-1).expand(target.size())
-    assert(not(pedestrians.min()==0))
-    if num_traj is None:
-        pred = net(sequence, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, batch_mean, batch_var)
-        batch_mean, batch_var = batch_mean.unsqueeze(1).expand_as(pred), batch_var.unsqueeze(1).expand_as(pred)
-        pred = pred*batch_var+batch_mean
-        target=target*batch_var+batch_mean 
-        target.data.masked_fill_(mask=~target_mask, value=float(0))
-        pred.data.masked_fill_(mask=~target_mask, value=float(0))
-        return pred,target,sequence[...,:2], pedestrians
-    else:
-        predictions = []
-        for _ in range(num_traj):
-            pred =  net(sequence, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, batch_mean, batch_var)
-            predictions+=[pred]
+    pred, encoded_op = net(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, mean, var)
+    pred = revert_orig_tensor(pred, mean, var, op_mask, dim=1)
+    target = revert_orig_tensor(target, mean, var, op_mask, dim=1)
+    sequence = revert_orig_tensor(sequence, mean, var, ip_mask, dim=1)
+    encoded_op = revert_orig_tensor(encoded_op, mean, var, ip_mask, dim=1)
+    return pred, target, sequence, pedestrians
+       
+def revert_orig_tensor(tensor, mean, var, mask, dim=0):
+	mean_ = mean.unsqueeze(dim).expand_as(tensor)
+	var_ = var.unsqueeze(dim).expand_as(tensor)
+	tensor = tensor*var_ + mean_
+	mask_ = mask.unsqueeze(-1).expand_as(tensor)
+	tensor.data.masked_fill_(mask=~mask_.bool(), value=float(0))
+	return tensor
+	
+def predict_multiple(batch,net,num_traj):
+    predictions=[]
+    train_ade_=[]
+    for _ in range(num_traj):
+        pred, target, sequence, pedestrians = predict(batch,net)
+        predictions+=[pred]
+    return predictions, target, sequence, pedestrians
 
-        batch_mean, batch_var = batch_mean.unsqueeze(1).expand_as(pred), batch_var.unsqueeze(1).expand_as(pred)
-        target=target*batch_var+batch_mean
-        target.data.masked_fill_(mask=~target_mask, value=float(0))
-        for i in range(len(predictions)):
-            predictions[i] = predictions[i]*batch_var+batch_mean
-            predictions[i].data.masked_fill_(mask=~target_mask, value=float(0))
-        return predictions, target,sequence[...,:2], pedestrians, dist_matrix,bearing_matrix,heading_matrix
 
-def get_distance_matrix(sample, neighbors_dim=0, eps=1e-24):
+def get_distance_matrix(sample, neighbors_dim=0, mask=None, eps=1e-14):
     if not (neighbors_dim==1): sample=sample.transpose(0,1)
     n=sample.size(1)
     s=sample.size(0)
@@ -99,50 +115,49 @@ def get_distance_matrix(sample, neighbors_dim=0, eps=1e-24):
     return distance 
 
 
-def get_features(sample, neighbors_dim, previous_sequence=None, mean=None, var=None):
-    #print(sample)
-    #input("--------")
+def get_features(sample, neighbors_dim, previous_sequence=None, mean=None, var=None, mask=None, eps=1e-14):
     if not (mean is None) and not (var is None):
         mean, var = mean.unsqueeze(neighbors_dim).expand_as(sample), var.unsqueeze(neighbors_dim).expand_as(sample)
-        sample = sample*var+mean
+        sample = (sample)*var+mean
         if not (previous_sequence is None):
-            previous_sequence=previous_sequence*var+mean
+            previous_sequence=(previous_sequence)*var+mean
     if not (neighbors_dim==1): sample=sample.transpose(0,1)
     n = sample.size(1)
-    s = sample.size(0)
-    x1 = sample[...,0]
-    y1 = sample[...,1]
-    x1 = x1.unsqueeze(-1).expand(s, n, n)
+    s = sample.size(0) # compute parallely for ..
+    x1 = sample[...,0] # x for all pedestrians
+    y1 = sample[...,1] # y for all pedestrians 
+    x1 = x1.unsqueeze(-1).expand(s, n, n) 
     y1 = y1.unsqueeze(-1).expand(s, n, n)
-    x2 = x1.transpose(1, 2)
+    x2 = x1.transpose(1, 2) 
     y2 = y1.transpose(1, 2)
-    dx = x2-x1 
-    dy = y2-y1 
-    bearing=rad2deg*torch.atan2(dy, dx)
-    distance=get_distance_matrix(sample,1)
-    heading=get_heading(sample, prev_sample=previous_sequence)
+    dx = x2-x1 # x for all pedestrians diff. 
+    dy = y2-y1 # y for all pedestrians diff. 
+    bearing=torch.atan2(dy, dx) # absolute bearing 
+    bearing=rad2deg*bearing
+    bearing = torch.where(bearing<0, bearing+360, bearing)
+    distance=get_distance_matrix(sample,1, mask=mask, eps=eps)
+    heading=get_heading(sample, prev_sample=previous_sequence, mask=mask) 
     heading = heading.unsqueeze(-1).expand(s, n, n)
-    bearing = heading-bearing
+    heading = torch.where(heading<0, heading+360, heading)
+    bearing=bearing-heading # 
     heading = heading.transpose(1,2)-heading
-    self_tensor = torch.ones_like(bearing)
+    self_tensor = torch.zeros_like(bearing)
     self_tensor[:, range(n), range(n)] = 1
-    bearing.data.masked_fill_(mask=~(self_tensor).bool(), value=float(0))
+    bearing.data.masked_fill_(mask=(self_tensor).bool(), value=float(0))
     bearing = torch.where(bearing<0, bearing+360, bearing)
     heading = torch.where(heading<0, heading+360, heading)
     if not neighbors_dim==1: distance, bearing, heading = distance.transpose(0,1),bearing.transpose(0,1),heading.transpose(0,1)
     return distance, bearing, heading
 
-def get_heading(sample, prev_sample=None):
+def get_heading(sample, prev_sample=None, mask=None):
     n=sample.size(1)
     diff=torch.zeros_like(sample)
     if prev_sample is None:
         diff[1:,...]=sample[1:,...]-sample[:-1,...]
         diff[0,...]=diff[1,...]
-        heading=rad2deg*torch.atan2(diff[...,1], diff[...,0])
-        heading=torch.where(heading<0, heading+360, heading)
     else:
-        diff=sample-prev_sample 
-        heading = rad2deg * torch.atan2(diff[...,1],diff[...,0])
+        diff=sample-prev_sample # y - y', x - x' (own displacement)
+    heading = rad2deg * torch.atan2(diff[...,1],diff[...,0]) # absolute heading
     return heading 
 
 def plot_domain(model, plot_file, delta_heading, delta_bearing):
@@ -214,47 +229,25 @@ def get_free_gpu():
 	# os.system("rm -r tmp")
 	return np.argmax(memory_available) 
 
-def plot_kde_domain(model, plot_file=None, delta_heading=30, delta_bearing=30):
-    r = model.spatial_attention.domain.detach().cpu().numpy()
-    max_dist = np.ceil(np.max(r))
-    r = np.around(r, 4)
-    fig = plt.figure(figsize=(12,8))
-    ax = fig.add_subplot(111) #, projection="polar")
-    #ax.set_theta_zero_location("N")
-     
-    for phi in range(np.shape(r)[0]):
-        _phi = delta_heading*phi
-        r12 = r[phi,:]
-        domain = np.zeros(360)
-        deg = 0
-        for j in range(len(r12)):
-            domain[int(deg):int(deg+delta_bearing)] = r12[j]
-            deg+=delta_bearing
-        offset_bearing=int(delta_bearing/2)
-        print(type(offset_bearing))
-        domain = np.roll(domain,int(offset_bearing))
-        theta = [math.radians(i) for i in np.arange(0, 360, 1)]
-        theta = np.array(theta)
-        x = domain*np.cos(theta-math.pi/2)
-        y = domain*np.sin(theta-math.pi/2)
-        x = np.array(x).reshape(360,1)
-        y = np.array(y).reshape(360,1)
-        xy = np.concatenate((x,y),axis=1)
-        df_phi = pd.DataFrame(xy, columns=['x','y'])
-        sns.kdeplot(df_phi['x'], df_phi['y'], shade=True, shade_lowest=True)
-	#ax.plot(theta, domain, linewidth=1.5, label=str(_phi-offset_bearing)+'$^{o}$-' + str(_phi+delta_heading-offset_bearing)+ '$^{o}$')
-    theta_ticks = np.arange(0,360,delta_bearing)
-    theta_ticks_labels = [str(int(theta))+"$^{o}$" for theta in theta_ticks]
-    #ax.set_xticks([math.radians(theta) for theta in theta_ticks])
-    #ax.set_xticklabels(theta_ticks_labels, fontsize=14)
-    ax.legend(loc='upper left',bbox_to_anchor=(1.05,1.05),ncol=1,fontsize="large", title="Relative Heading Angle ($\phi^{21}$)")
-    ax.tick_params(axis='x', which='major', pad=5)
-    ax.tick_params(axis="y", labelsize=14)
-    #ax.set_rlabel_position(15)
-    ax.annotate('$p_{1}$',xy=(-90,0.5),fontsize=15)
-    ax.arrow(0,0,0,1,alpha = 0.5, width = 0.15,edgecolor = 'black', facecolor = 'black', lw = 2)
-    ax.grid(linewidth=0.2)
-    if plot_file is None:return plt
-    else:plt.savefig(plot_file)
+def init_weights(m):
+    classname = m.__class__.__name__
+    if classname.find('Linear') != -1: nn.init.xavier_normal_(m.weight)
 
+class EarlyStopping:
+	def __init__(self, patience=20, delta=0.001):
+		self.patience=patience
+		self.counter=0
+		self.val_loss_min=np.Inf
+		self.delta=delta
+		self.early_stop=False
+		self.best_score=None
+	def __call__(self, val_loss):
+		score=-val_loss
+		if not self.best_score is None and score<(self.best_score+self.delta):
+			self.counter+=1
+			if self.counter>=self.patience:
+				self.early_stop=True
+		else:
+			self.best_score=score
+			self.counter=0
 
