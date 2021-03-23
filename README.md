@@ -74,6 +74,9 @@ sh scripts/script_evaluate_generative.sh
 
 ## Results 
 
+We evaluate our proposed methods on two metrics: average displacement error and final displacement error. The ADE / FDE values (in m) for our methods across the five datasets are reported below. 
+
+
 |                	| ETH         	| HOTEL       	| ZARA1       	| ZARA2       	| UNIV        	| AVG         	|
 |----------------	|-------------	|-------------	|-------------	|-------------	|-------------	|-------------	|
 | vanillaSCAN    	| 0.79 / 1.36 	| 0.46 / 0.95 	| 0.64 / 1.34 	| 0.33 / 0.71 	| 0.39 / 0.86 	| 0.52 / 1.04 	|
