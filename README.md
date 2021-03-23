@@ -55,6 +55,7 @@ There are several available models to choose from, main variants being:
 <em> in progress: SCAN with scene context trained to extract scene relevant features from the static scene image pertaining to a dataset, using pretrained resnet-18 model </em>
 
 To train **SCAN**, i.e., the deterministic model with our chosen hyperparameters, simply edit `--dset_name` and `model_type` arguments in the `scripts/script_train_deterministic.sh` script. 
+
 All other arguments are specified and explained in `arguments.py`. 
 
 To train **GenerativeSCAN** with our chosen hyperparameters, similarly edit `--dset_name` and `model_type` arguments in the `scripts/script_train_generative.sh` script. 
@@ -68,11 +69,16 @@ sh scripts/script_evaluate_deterministic.sh
 and 
 
 ```
-sh sscripts/script_evaluate_generative.sh
+sh scripts/script_evaluate_generative.sh
 ```
 
+## Results 
 
-
+|                	| ETH         	| HOTEL       	| ZARA1       	| ZARA2       	| UNIV        	| AVG         	|
+|----------------	|-------------	|-------------	|-------------	|-------------	|-------------	|-------------	|
+| vanillaSCAN    	| 0.79 / 1.36 	| 0.46 / 0.95 	| 0.64 / 1.34 	| 0.33 / 0.71 	| 0.39 / 0.86 	| 0.52 / 1.04 	|
+| SCAN           	| 0.78 / 1.29 	| 0.40 / 0.76 	| 0.38 / 0.80 	| 0.33 / 0.72 	| 0.62 / 1.28 	| 0.50 / 0.97 	|
+| GenerativeSCAN 	| 0.79 / 1.49 	| 0.37 / 0.74 	| 0.37 / 0.78 	| 0.31 / 0.66 	| 0.58 / 1.23 	| 0.48 / 0.98 	|
 
 
 
