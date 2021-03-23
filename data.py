@@ -37,7 +37,7 @@ class dataset(Dataset):
 		for f,filename in enumerate(filenames):
 			df, means, var=self.load_data(filename)
 			self.get_sequences(df, filename, means, var)
-			print(f"Processing scene context for {filename}")
+			#print(f"Processing scene context for {filename}")
 			self.scene_contexts[filename] = self.get_scene_context(filename) 
 			pbar.set_description(f"Processing {filename} Total Samples: {self.len}")
 			pbar.update(1)
@@ -83,17 +83,19 @@ class dataset(Dataset):
 		elif 'students' in fname or 'uni_examples' in fname:scene_fname = "static_scene_context/univ.png"
 		elif 'biwi_eth' in fname:scene_fname = "static_scene_context/eth.png"
 		elif 'biwi_hotel' in fname:scene_fname = "static_scene_context/hotel.png"
-		print(f"Processing scene for {fname} from {scene_fname}") 
+		#print(f"Processing scene for {fname} from {scene_fname}") 
 		return preprocess_image(scene_fname)
 	def get_sequence(self,frame, means=None, var=None):
 		if means is None:
-			means = [frame['x'].mean(), frame['y'].mean()]
 			frame['x'] = frame['x']-frame['x'].min()
 			frame['y'] = frame['y']-frame['y'].min()
-		frame['x'] = frame['x']-means[0]
-		frame['y'] = frame['y']-means[1]
+			means = [frame['x'].mean(), frame['y'].mean()]
+		
+		#frame['x'] = frame['x']-means[0]
+		#frame['y'] = frame['y']-means[1]
 		if var is None:
-			var = [max([abs(frame['x'].max()), abs(frame['x'].min())]), max([abs(frame['y'].max()), abs(frame['y'].min())])]
+			#var = [max([abs(frame['x'].max()), abs(frame['x'].min())]), max([abs(frame['y'].max()), abs(frame['y'].min())])]
+			var = [frame['x'].max(), frame['y'].max()]
 		frame['x'] = frame['x']/var[0] 
 		frame['y'] = frame['y']/var[1] 
 		frame=frame.values
@@ -112,6 +114,7 @@ class dataset(Dataset):
 			pedestrianIDs=np.unique(pedestrianTraj[:,0])
 			maskPedestrian=np.ones(len(frameIDs))
 			pedestrianTraj=pedestrianTraj[:,2:]
+			pedestrianTraj=pedestrianTraj+(1e-02) 
 			sequence+=[torch.from_numpy(pedestrianTraj[:,:2].astype('float32')).unsqueeze(0)]
 			mask+=[torch.from_numpy(maskPedestrian.astype('float32')).bool().unsqueeze(0)]
 		if not sequence:
@@ -134,7 +137,8 @@ class dataset(Dataset):
 		ip_mask = mask[:,:self.obs_len]
 		op_mask = mask[:,self.obs_len].unsqueeze(-1).expand(ip_mask.size(0),self.pred_len)
 		ip_ = revert_orig_tensor(ip, mean, var, ip_mask)
-		dist_matrix, bearing_matrix, heading_matrix =get_features(ip_, 0, eps=0) #, mean=mean, var=var)
+		seq_ = revert_orig_tensor(sequence, mean, var, mask)
+		dist_matrix, bearing_matrix, heading_matrix =get_features(seq_, 0, eps=0) #, mean=mean, var=var)
 		return {'input':ip,'output':op[...,:2],'dist_matrix':dist_matrix,
 			'bearing_matrix':bearing_matrix,'heading_matrix':heading_matrix,
 			'ip_mask':ip_mask,'op_mask':op_mask,'pedestrians':pedestrians, 
@@ -172,7 +176,7 @@ class collate_function(object):
 		"""
 		batch_size=len(batch)
 		features = list(batch[0].keys())
-		_len = max([b['input'].size(0) for b in batch])
+		_len = max([b['pedestrians'].data for b in batch])
 		output_batch = []
 		for f in features:
 			if ('pedestrians' in f) or ('mean' in f) or ('var' in f) or ('scene_context' in f):

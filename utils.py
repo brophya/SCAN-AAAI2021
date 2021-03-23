@@ -1,6 +1,7 @@
 import os
 import torch
 import math
+import csv
 import numpy as np 
 import pandas as pd 
 import random
@@ -9,7 +10,8 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import matplotlib
 matplotlib.use("agg")
-from matplotlib import pyplot as plt 
+from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 import torchvision
 from torchvision import transforms as transforms 
 from PIL import Image 
@@ -28,12 +30,15 @@ def round_(tensor, digits=2):
 	rounded=(tensor*10**digits).round()/(10**digits)
 	return rounded
 
-def eval_metrics(pred, targets, num_peds, eps=1e-14):
+def eval_metrics(pred, targets, num_peds, mask, eps=1e-14):
     num_peds = num_peds.sum() # sum across all pedestrians in all abtches
     dist=torch.sqrt(((pred-targets)**2).sum(dim=-1)+eps) 
-    fde = dist[:,:,-1].sum()/num_peds
-    dist = dist.sum(dim=-1)/(dist.size(-1))
-    ade = dist.sum()/(num_peds)
+    dist_final = dist[:,:,-1].view(-1) 
+    dist_final = dist_final[~(mask[:,:,-1].view(-1)==0)]
+    fde = dist_final.mean()
+    dist = dist.view(-1)
+    dist = dist[~(mask.view(-1)==0)]
+    ade = dist.mean() 
     return ade , fde
 
 def fde(pred, targets, num_peds, eps=1e-14):
@@ -57,7 +62,6 @@ def preprocess_image(fname):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
     img = preprocess(img)
-    #img=torch.zeros(224, 224)
     return img 
 
 def evaluate_model(model, testloader):
@@ -65,55 +69,65 @@ def evaluate_model(model, testloader):
     test_fde=float(0)
     model.eval()
     for b, batch in enumerate(testloader):
-        pred, target,sequence, pedestrians = predict(batch,model)
-        ade_b, fde_b = eval_metrics(pred, target, pedestrians, eps=0)
+        pred, target,sequence, pedestrians, op_mask, _ = predict(batch,model)
+        ade_b, fde_b = eval_metrics(pred, target, pedestrians, op_mask, eps=0)
         test_ade+=ade_b.item()
         test_fde+=fde_b.item()
     test_ade/=(b+1)
     test_fde/=(b+1)
     return test_ade, test_fde
 
-def predict(batch, net):
+def predict(batch, net, domain=None):
     batch = get_batch(batch)
     sequence,target,dist_matrix,bearing_matrix,heading_matrix,\
     ip_mask,op_mask,pedestrians, scene_context, \
     mean, var = batch
     target_mask = op_mask.unsqueeze(-1).expand(target.size())
-    pred, encoded_op = net(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, mean, var)
+    pred, encoded_op = net(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, mean, var,domain=domain)
     pred = revert_orig_tensor(pred, mean, var, op_mask, dim=1)
     target = revert_orig_tensor(target, mean, var, op_mask, dim=1)
     sequence = revert_orig_tensor(sequence, mean, var, ip_mask, dim=1)
-    encoded_op = revert_orig_tensor(encoded_op, mean, var, ip_mask, dim=1)
-    return pred, target, sequence, pedestrians
-       
+    return pred, target, sequence, pedestrians, op_mask, ip_mask 
+
+def normalize_tensor(tensor, mean, var, mask, dim=0):
+	var_ = var.unsqueeze(dim).expand_as(tensor) 
+	tensor = (tensor/var_) + (1e-02)
+	mask_ = mask.unsqueeze(-1).expand_as(tensor) 
+	tensor.data.masked_fill_(mask=~mask_.bool(), value=float(0))
+	return tensor
+
 def revert_orig_tensor(tensor, mean, var, mask, dim=0):
 	mean_ = mean.unsqueeze(dim).expand_as(tensor)
 	var_ = var.unsqueeze(dim).expand_as(tensor)
-	tensor = tensor*var_ + mean_
+	tensor = (tensor-(1e-02))*var_ 
 	mask_ = mask.unsqueeze(-1).expand_as(tensor)
 	tensor.data.masked_fill_(mask=~mask_.bool(), value=float(0))
 	return tensor
 	
-def predict_multiple(batch,net,num_traj):
-    predictions=[]
-    train_ade_=[]
-    for _ in range(num_traj):
-        pred, target, sequence, pedestrians = predict(batch,net)
-        predictions+=[pred]
-    return predictions, target, sequence, pedestrians
-
+def predict_multiple(batch,net,num_traj, domain=None):
+    batch_size = batch[0].size(0)
+    batch = [tensor.repeat(num_traj, *np.ones(len(tensor.size()[1:])).astype('int')) for tensor in batch]
+    pred, target, sequence, pedestrians, _, _ = predict(batch,net,domain=domain)
+    predictions = pred.view(num_traj, batch_size, *pred.size()[1:]) # batch_size, num_pedestrians, pred_len, 2 
+    target = target.view(num_traj, batch_size, *target.size()[1:])
+    sequence = sequence.view(num_traj, batch_size, *sequence.size()[1:])
+    pedestrians = pedestrians.view(num_traj, batch_size, *pedestrians.size()[1:])
+    return predictions, target[0,...], sequence[0,...], pedestrians[0,...]
 
 def get_distance_matrix(sample, neighbors_dim=0, mask=None, eps=1e-14):
-    if not (neighbors_dim==1): sample=sample.transpose(0,1)
-    n=sample.size(1)
-    s=sample.size(0)
-    norms=torch.sum((sample)**2,dim=2,keepdim=True)
-    norms=norms.expand(s,n,n)+norms.expand(s,n,n).transpose(1,2)
-    dsquared=norms-2*torch.bmm(sample,sample.transpose(1,2))
+    s, n = sample.size()[:2]
+    norms=torch.sum((sample)**2,dim=-1,keepdim=True)
+    norms=norms.expand(s, n, n)+norms.expand(s, n, n).transpose(1,2)
+    ab_term = torch.bmm(sample,sample.transpose(1,2))
+    dsquared=norms-2*ab_term.view(s,n,n)
     distance = torch.sqrt(torch.abs(dsquared)+eps)
-    if not neighbors_dim==1: distance=distance.transpose(0,1)
     return distance 
 
+def mask_matrix(matrix, mask, n_dims):
+	mask = mask.unsqueeze(-1).expand_as(matrix)
+	mask = mask.mul(mask.transpose(*n_dims))
+	matrix = matrix*mask
+	return matrix
 
 def get_features(sample, neighbors_dim, previous_sequence=None, mean=None, var=None, mask=None, eps=1e-14):
     if not (mean is None) and not (var is None):
@@ -122,30 +136,42 @@ def get_features(sample, neighbors_dim, previous_sequence=None, mean=None, var=N
         if not (previous_sequence is None):
             previous_sequence=(previous_sequence)*var+mean
     if not (neighbors_dim==1): sample=sample.transpose(0,1)
-    n = sample.size(1)
-    s = sample.size(0) # compute parallely for ..
+    s, n = sample.size()[:2]
+    if len(sample.size())==4: # batch_size x num_pedestrians x pred_len x 2 
+        plen=sample.size(2)
+        expand_dims = (s, n, plen, n)
+        n_dims = (1, 3)
+    elif len(sample.size())==3:
+        expand_dims=(s, n, n)
+        n_dims = (1,2)
     x1 = sample[...,0] # x for all pedestrians
     y1 = sample[...,1] # y for all pedestrians 
-    x1 = x1.unsqueeze(-1).expand(s, n, n) 
-    y1 = y1.unsqueeze(-1).expand(s, n, n)
-    x2 = x1.transpose(1, 2) 
-    y2 = y1.transpose(1, 2)
+    x1 = x1.unsqueeze(-1).expand(*expand_dims)
+    y1 = y1.unsqueeze(-1).expand(*expand_dims)
+    x2 = x1.transpose(*n_dims)
+    y2 = y1.transpose(*n_dims)
     dx = x2-x1 # x for all pedestrians diff. 
     dy = y2-y1 # y for all pedestrians diff. 
     bearing=torch.atan2(dy, dx) # absolute bearing 
     bearing=rad2deg*bearing
     bearing = torch.where(bearing<0, bearing+360, bearing)
-    distance=get_distance_matrix(sample,1, mask=mask, eps=eps)
+    if len(sample.size())==4:
+        distance=torch.stack([get_distance_matrix(sample[i,...].transpose(0,1),neighbors_dim=1, mask=mask, eps=eps) for i in range(sample.size(0))], dim=0)
+        distance=distance.transpose(1,2)
+    else:
+        distance=get_distance_matrix(sample,neighbors_dim=1, mask=mask, eps=eps)
     heading=get_heading(sample, prev_sample=previous_sequence, mask=mask) 
-    heading = heading.unsqueeze(-1).expand(s, n, n)
+    heading = heading.unsqueeze(-1).expand(*expand_dims) 
     heading = torch.where(heading<0, heading+360, heading)
     bearing=bearing-heading # 
-    heading = heading.transpose(1,2)-heading
+    heading = heading.transpose(*n_dims)-heading
     self_tensor = torch.zeros_like(bearing)
-    self_tensor[:, range(n), range(n)] = 1
+    self_tensor[:, range(n), ..., range(n)] = 1
     bearing.data.masked_fill_(mask=(self_tensor).bool(), value=float(0))
     bearing = torch.where(bearing<0, bearing+360, bearing)
     heading = torch.where(heading<0, heading+360, heading)
+    if not mask is None:
+        bearing, heading, distance = mask_matrix(bearing, mask, n_dims), mask_matrix(heading, mask, n_dims), mask_matrix(distance, mask, n_dims)
     if not neighbors_dim==1: distance, bearing, heading = distance.transpose(0,1),bearing.transpose(0,1),heading.transpose(0,1)
     return distance, bearing, heading
 
@@ -153,8 +179,12 @@ def get_heading(sample, prev_sample=None, mask=None):
     n=sample.size(1)
     diff=torch.zeros_like(sample)
     if prev_sample is None:
-        diff[1:,...]=sample[1:,...]-sample[:-1,...]
-        diff[0,...]=diff[1,...]
+        if (len(sample.size())==3): 
+            diff[1:,...]=sample[1:,...]-sample[:-1,...]
+            diff[0,...]=diff[1,...]
+        elif (len(sample.size())==4):
+            diff[:,:,1:,...] = sample[:,:,1:,...]-sample[:,:,:-1,...]
+            diff[:,:,0,...] = diff[:,:,1,...]
     else:
         diff=sample-prev_sample # y - y', x - x' (own displacement)
     heading = rad2deg * torch.atan2(diff[...,1],diff[...,0]) # absolute heading
@@ -234,7 +264,7 @@ def init_weights(m):
     if classname.find('Linear') != -1: nn.init.xavier_normal_(m.weight)
 
 class EarlyStopping:
-	def __init__(self, patience=20, delta=0.001):
+	def __init__(self, patience=40, delta=0.0001):
 		self.patience=patience
 		self.counter=0
 		self.val_loss_min=np.Inf
@@ -250,4 +280,43 @@ class EarlyStopping:
 		else:
 			self.best_score=score
 			self.counter=0
+
+def plot_grad_flow(named_parameters):
+	ave_grads=[]
+	max_grads=[]
+	layers=[]
+	plt.rcParams['xtick.labelsize']=3
+	for n, p in named_parameters:
+		if (p.requires_grad) and ("bias" not in n):
+			if p.grad is None:
+				print(f"{n} has None grad!")
+				continue
+			layers.append(n)
+			ave_grads.append(p.grad.abs().mean())
+			print(n, p.grad.abs().max())
+			max_grads.append(p.grad.abs().max())
+	plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
+	plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
+	plt.hlines(0, 0, len(ave_grads)+1, lw=2, color="k")
+	plt.xticks(range(0, len(ave_grads), 1), layers)
+	plt.xlim(left=0, right=len(ave_grads))
+	plt.ylim(bottom = -0.001, top=0.02)
+	plt.xlabel("Layers")
+	plt.ylabel("average gradient")
+	plt.title("Gradient flow")
+	plt.grid(True)
+	plt.legend([Line2D([0], [0], color="c", lw=4),
+	                Line2D([0], [0], color="b", lw=4),
+			                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
+	plt.savefig("gradient_flow.png")
+
+def log_results(fname, logger):
+	writeheader=True
+	if os.path.exists(fname): writeheader=False
+	f = open(fname, 'a')
+	w = csv.DictWriter(f, logger.keys())
+	if writeheader: w.writeheader()
+	w.writerow(logger)
+	f.close()
+
 

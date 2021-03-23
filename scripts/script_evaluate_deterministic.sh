@@ -1,13 +1,15 @@
-for dset in zara1 zara2 univ eth hotel
+for dset in zara1 zara2 eth univ hotel 
+do
+for p in 12
 do
 python -u train_deterministic.py \
 --dset_name $dset \
 --test_only \
 --obs_len 8 \
---pred_len 12 \
+--pred_len $p \
 --delim "\t" \
 --model_type spatial_temporal \
---domain_parameter 5 \
+--domain_parameter 2 \
 --batch_size 32 \
 --eval_batch_size 32 \
 --delta_bearing 30 \
@@ -17,4 +19,5 @@ python -u train_deterministic.py \
 --attention_dim 32 \
 --embedding_dim 16 \
 --use_scene_context 
+done
 done

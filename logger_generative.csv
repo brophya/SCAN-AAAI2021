@@ -1,3 +1,0 @@
-seed,dset_name,model_type,obs_len,pred_len,encoder_dim,decoder_dim,attention_dim,embedding_dim,domain_parameter,best_k,num_traj,weight_sim,num_iter,ade,fde
-100,univ,generative_spatial_temporal,8,12,32,32,32,16,5.0,1,20,0.0,1,0.5872148871421814,1.2351502180099487
-100,eth,generative_spatial_temporal,8,12,32,32,32,16,5.0,1,20,0.0,1,0.8405748605728149,1.4945671558380127
