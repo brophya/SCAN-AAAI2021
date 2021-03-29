@@ -17,7 +17,7 @@ Our model contains an LSTM-based Encoder-Decoder Framework that takes as input o
 <img src = https://github.com/coordinated-systems-lab/AAAI-21-Submission/blob/master/model.png width="1000" height="500">
 
 </p>
-;
+
 ## Example Predictions
 
 ### Multiple Socially Plausible Predictions
@@ -79,7 +79,7 @@ We evaluate our proposed methods on two metrics: average displacement error and 
 
 |                	| ETH         	| HOTEL       	| ZARA1       	| ZARA2       	| UNIV        	| AVG         	|
 |----------------	|-------------	|-------------	|-------------	|-------------	|-------------	|-------------	|
-| vanillaSCAN    	| 0.79 / 1.36 	| 0.46 / 0.95 	| 0.64 / 1.34 	| 0.33 / 0.71 	| 0.39 / 0.86 	| 0.52 / 1.04 	|
+| vanillaSCAN    	| 0.79 / 1.36 	| 0.46 / 0.95 	| 0.39 / 0.86 	| 0.33 / 0.71	  | 0.64 / 1.34   | 0.52 / 1.04 	|
 | SCAN           	| 0.78 / 1.29 	| 0.40 / 0.76 	| 0.38 / 0.80 	| 0.33 / 0.72 	| 0.62 / 1.28 	| 0.50 / 0.97 	|
 | GenerativeSCAN 	| 0.79 / 1.49 	| 0.37 / 0.74 	| 0.37 / 0.78 	| 0.31 / 0.66 	| 0.58 / 1.23 	| 0.48 / 0.98 	|
 
