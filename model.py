@@ -101,7 +101,7 @@ class TrajectoryGenerator(nn.Module):
 		input_mask = input_mask.view(total_peds, self.obs_len)
 		mask=output_mask.view(total_peds,self.pred_len)
 		x_ = revert_orig_tensor(x.view(batch_size, num_pedestrians, 2), mean, var, input_mask[:,-1].view(batch_size, num_pedestrians), dim=1)
-		distance_matrix, bearing_matrix, heading_matrix = dmat[:,:,self.obs_len-1,:], bmat[:,:,self.obs_len-1,:], hmat[:,:,self.obs_len,:]
+		distance_matrix, bearing_matrix, heading_matrix = dmat[:,:,self.obs_len-1,:], bmat[:,:,self.obs_len-1,:], hmat[:,:,self.obs_len-1,:]
 		for j in range(self.pred_len):
 			x = x.view(total_peds, 2) # batch_size x num_pedestrians x feature_dim -> total_peds x feature_dim  
 			embedded_x=self.decoder_embedding(x) # total_peds x embedding_dim 
@@ -125,8 +125,9 @@ class TrajectoryGenerator(nn.Module):
 			x_out_ = revert_orig_tensor(x_out.view(batch_size,num_pedestrians,2), mean, var, mask[:,j].view(batch_size, num_pedestrians), dim=1) # batch_size x num_pedestrians x feature_dim
 			x_ = x_out_
 			distance_matrix, bearing_matrix, heading_matrix=get_features(x_out_, 1, x_, mask=mask[:,j].view(batch_size, num_pedestrians), eps=eps) 
+			prediction+=[x_out.view(batch_size,num_pedestrians,2)]
+			x_ = x_out_
 			x = x_out
-			prediction+=[x_out.view(batch_size,num_pedestrians,2)] 
 		prediction = torch.stack(prediction, dim=2)
 		return prediction
 	def forward(self, x, pedestrians, dmat, bmat, hmat, input_mask, output_mask, scene, mean=None, var=None, domain=None):

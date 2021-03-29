@@ -62,21 +62,20 @@ class dataset(Dataset):
 		while not (j+self.obs_len+self.pred_len)>len(timestamps):
 			frameTimestamps=timestamps[j:j+self.obs_len+self.pred_len]
 			frame=df.loc[df['t'].isin(frameTimestamps)]
-			if (not np.amax(np.diff(frameTimestamps))>10):
-					# use df mean, var to normalize if using scene_context in model, comment out other
-					sequence, mask, pedestrians, mean, var = self.get_sequence(frame, means, var)
-					#sequence, mask, pedestrians, mean, var = self.get_sequence(frame)
-					if not (pedestrians.data==0).any(): 
-						self.len+=1
-						sample={}
-						sample['observation']=sequence
-						sample['mask']=mask
-						sample['pedestrians']=pedestrians
-						sample['mean']=mean
-						sample['var']=var
-						sample['fname'] = fname
-						#sample['scene_context']=scene_context
-						self.samples+=[sample]
+			# use df mean, var to normalize if using scene_context in model, comment out other
+			sequence, mask, pedestrians, mean, var = self.get_sequence(frame, means, var)
+			#sequence, mask, pedestrians, mean, var = self.get_sequence(frame)
+			if not (pedestrians.data==0).any(): 
+				self.len+=1
+				sample={}
+				sample['observation']=sequence
+				sample['mask']=mask
+				sample['pedestrians']=pedestrians
+				sample['mean']=mean
+				sample['var']=var
+				sample['fname'] = fname
+				#sample['scene_context']=scene_context
+				self.samples+=[sample]
 			j+=self.shift	
 	def get_scene_context(self, fname):
 		if 'crowds_zara02' in fname or 'crowds_zara03' in fname or 'crowds_zara01' in fname: scene_fname = "static_scene_context/zara1.png"

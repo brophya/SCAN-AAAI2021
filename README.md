@@ -32,7 +32,7 @@ Human motion is multimodal, and often there is no single correct future trajecto
   
 ## Training Details
 
-We train and evaluate our models on five publicly available datasets: ETH, HOTEL, UNIV, ZARA1, ZARA2. We follow a leave-one-out process where we train on four of the five models and test on the fifth. The exact training, validation, test datasets we use are in directory data/ . For each pedestrian in a given frame, our model observes the trajectory for 8 time steps (3.2 seconds) and predicts intent over future 8 time steps (3.2 seconds) jointly for all pedestrians in the scene.
+We train and evaluate our models on five publicly available datasets: ETH, HOTEL, UNIV, ZARA1, ZARA2. We follow a leave-one-out process where we train on four of the five models and test on the fifth. The exact training, validation, test datasets we use are in directory data/ . For each pedestrian in a given frame, our model observes the trajectory for 8 time steps (3.2 seconds) and predicts intent over future 12 time steps (3.2 seconds) jointly for all pedestrians in the scene.
 
 There are several available models to choose from, main variants being:
 1. `vanilla`, which is a vanilla LSTM-based autoencoder,
