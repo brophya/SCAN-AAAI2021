@@ -28,18 +28,20 @@ def traj_similarity(predictions, mask, eps=1e-16, k=1):
 	predictions = predictions.transpose(0,1)
 	mask = mask.view(-1, prediction_length)
 	similarity_score=[]
+	valid_trajs=0
 	for t in range(num_traj):
 		mask_t = mask[t,:] # prediction_length
-		mask_t = mask_t.unsqueeze(-1).unsqueeze(-1).expand(prediction_length, best_k, best_k)
-		mask_t = mask_t*mask_t.transpose(1,2)
-		pred = predictions[t,...] # 1 x num_traj x prediction_length x feature_size
-		dist = get_distance_matrix(pred.transpose(0,1), neighbors_dim=1) 
-		s = torch.exp(-k*dist+eps) 
-		s = s*mask_t
-		s[:, range(best_k), range(best_k)].data.fill_(0.0)
-		s = s.sum()
-		s = s.div(prediction_length*best_k) 
-		similarity_score.append(s)
-	similarity = torch.stack(similarity_score, dim=0).mean()
+		if not (mask_t==0).all():
+			valid_trajs+=1
+			mask_t = mask_t.unsqueeze(-1).unsqueeze(-1).expand(prediction_length, best_k, best_k)
+			mask_t = mask_t*mask_t.transpose(1,2)
+			pred = predictions[t,...] # 1 x num_traj x prediction_length x feature_size
+			dist = get_distance_matrix(pred.transpose(0,1), neighbors_dim=1) 
+			s = torch.exp(-dist+eps) 
+			s = s*mask_t
+			s[:, range(best_k), range(best_k)] = 0
+			s = s.sum()
+			similarity_score.append(s)
+	similarity = torch.stack(similarity_score, dim=0).sum().div(prediction_length*best_k*valid_trajs)
 	return similarity
 

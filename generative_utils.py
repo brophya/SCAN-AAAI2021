@@ -10,22 +10,27 @@ from losses import *
 adv_loss = nn.BCELoss()
 
 def discriminator_step(b, batch, generator, discriminator, optimizer_d, d_spatial=False, eps=1e-06, d_type='global', d_domain=False):
+	discriminator.train()
 	optimizer_d.zero_grad()
 
 	batch = get_batch(batch)
 	sequence,target,dist_matrix,bearing_matrix,heading_matrix,ip_mask, op_mask, pedestrians, scene_context, batch_mean, batch_var = batch
-	prediction, target, sequence, pedestrians, op_mask, _= predict(batch, generator)
-	
+	prediction = generator(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, batch_mean, batch_var) 
+	prediction = revert_orig_tensor(prediction, batch_mean, batch_var, op_mask, dim=1)    
+	target = revert_orig_tensor(target, batch_mean, batch_var, op_mask, dim=1)
+
 	obs_len = sequence.size(2) 
 	if d_spatial:
 		pred_dmat, pred_bmat, pred_hmat = get_features(prediction,1) 
 		pred_bmat, pred_hmat, pred_dmat = mask_matrix(pred_bmat,op_mask,(1,3)), mask_matrix(pred_hmat,op_mask,(1,3)), mask_matrix(pred_dmat,op_mask,(1,3))
-	sequence = normalize_tensor(sequence, batch_mean, batch_var, ip_mask, dim=1) 
+	
+		target_dmat, target_bmat, target_hmat = get_features(target,1)
+		target_dmat, target_bmat, target_hmat = mask_matrix(target_dmat, op_mask, (1,3)), mask_matrix(target_bmat, op_mask, (1,3)), mask_matrix(target_hmat, op_mask, (1,3))
 	prediction = normalize_tensor(prediction, batch_mean, batch_var, op_mask, dim=1)
 	target = normalize_tensor(target, batch_mean, batch_var, op_mask, dim=1)
 	
 	domain=None
-	if not d_domain:
+	if not d_domain and hasattr(generator, 'spatial_attention'):
 		domain = generator.spatial_attention.domain
 
 	obs_len=sequence.size(2)
@@ -35,7 +40,6 @@ def discriminator_step(b, batch, generator, discriminator, optimizer_d, d_spatia
 		prediction = torch.cat((sequence, prediction), dim=2)
 		op_mask = torch.cat((ip_mask, op_mask), dim=-1) 
 		target = torch.cat((sequence, target), dim=2)	
-
 
 	if d_spatial:
 		
@@ -49,49 +53,59 @@ def discriminator_step(b, batch, generator, discriminator, optimizer_d, d_spatia
 		scores_fake = discriminator(prediction)
 		
 	scores_fake = scores_fake.view(-1)[~(op_mask[...,-1].view(-1)==0)]
-	fake = Variable(torch.zeros_like(scores_fake), requires_grad=False).uniform_(0.0, 0.3)
+	fake = Variable(torch.zeros_like(scores_fake), requires_grad=False)
 	fake_loss = adv_loss(scores_fake, fake) 
 	if d_spatial:
 		obs_len=sequence.size(2)
 		if d_type=='global':
+			dist_matrix = torch.cat((dist_matrix, target_dmat), 2)
+			bearing_matrix=torch.cat((bearing_matrix, target_bmat),2)
+			heading_matrix=torch.cat((heading_matrix,target_hmat),2)
+			
 			scores_real = discriminator(target, dist_matrix, bearing_matrix, heading_matrix, op_mask, domain=domain)
 		else:
 			
-			scores_real = discriminator(target, dist_matrix[:,:,obs_len:,:], bearing_matrix[:,:,obs_len:,:], heading_matrix[:,:,obs_len:,:], op_mask, domain=domain)
+			scores_real = discriminator(target, target_dmat, target_bmat, target_hmat, op_mask, domain=domain)
 
 	else:
 		scores_real = discriminator(target)
 	
-	
 	scores_real = scores_real.view(-1)[~(op_mask[...,-1].view(-1)==0)]
-	valid = Variable(torch.ones_like(scores_real), requires_grad=False).uniform_(0.8,1.0)
+	valid = Variable(torch.ones_like(scores_real), requires_grad=False)
 	real_loss = adv_loss(scores_real, valid)
 
 	loss = real_loss+fake_loss
-	loss = loss/2
 	
 	loss.backward()
-
 	optimizer_d.step()
 	return loss
 
 def generator_step(b, batch, generator, discriminator=None, optimizer_g=None, best_k=None, l=None, train=True, d_spatial=False, l2_loss_weight=1, clip=None, d_type='global',d_domain=False):
+	eps=0
+	reduction='sum'
 	if generator.training: 
 		optimizer_g.zero_grad()
-	min_ade=float(1000)
+		eps=1e-14
+		reduction='mean'
+	min_ade=float(np.inf) 
 	batch = get_batch(batch)
 	sequence,target,dist_matrix,bearing_matrix,heading_matrix,ip_mask, op_mask, pedestrians, scene_context, batch_mean, batch_var = batch
 	batch_size=sequence.size(0)
-	predictions, target, sequence, pedestrians = predict_multiple(batch, generator, best_k)
-	
-	ade_vals = [] 
+	target_mask = op_mask.unsqueeze(-1).expand(target.size())
+	predictions = []
+	target = revert_orig_tensor(target, batch_mean, batch_var, op_mask, dim=1)  
 	for k in range(best_k):
-		ade_g, fde_g = eval_metrics(predictions[k,...], target, pedestrians, op_mask)
-		ade_vals+=[ade_g]
-		if ade_g.item()<min_ade:
+		prediction = generator(sequence, pedestrians, dist_matrix, bearing_matrix, heading_matrix, ip_mask, op_mask, scene_context, batch_mean, batch_var) 
+		prediction = revert_orig_tensor(prediction, batch_mean, batch_var, op_mask, dim=1) 
+		ade_g, fde_g = eval_metrics(prediction, target, pedestrians, op_mask,eps=eps, reduction=reduction)
+		predictions+=[prediction]
+		if (k==0):
+			first_ade=ade_g
+		if ade_g<min_ade:
 			min_ade=ade_g
 			fde_ = fde_g 
-			final_pred = predictions[k]
+	final_pred = prediction
+	predictions = torch.stack(predictions, dim=0) 
 	if generator.training:
 		if not (l==0):
 			similarity_metric = traj_similarity(predictions, op_mask)
@@ -99,13 +113,11 @@ def generator_step(b, batch, generator, discriminator=None, optimizer_g=None, be
 		if d_spatial:
 			pred_dmat, pred_bmat, pred_hmat = get_features(final_pred,1)
 			pred_bmat, pred_hmat, pred_dmat = mask_matrix(pred_bmat,op_mask,(1,3)), mask_matrix(pred_hmat,op_mask,(1,3)), mask_matrix(pred_dmat,op_mask,(1,3))
-				
 		final_pred = normalize_tensor(final_pred, batch_mean, batch_var, op_mask, dim=1)
-		sequence = normalize_tensor(sequence, batch_mean, batch_var, ip_mask, dim=1)
 
 		if d_type=='global':
 			final_pred = torch.cat((sequence, final_pred), dim=2)
-
+		
 		if d_spatial:
 			obs_len = sequence.size(2)
 			if d_type=='global':
@@ -115,17 +127,18 @@ def generator_step(b, batch, generator, discriminator=None, optimizer_g=None, be
 				op_mask = torch.cat((ip_mask, op_mask), dim=-1)
 
 			domain=None
-			if not d_domain:
+			if not d_domain and hasattr(generator, 'spatial_attention'):
 				domain = generator.spatial_attention.domain
 			
+
 			scores_fake = discriminator(final_pred, pred_dmat, pred_bmat, pred_hmat, op_mask, domain=domain)
 		else:
 			scores_fake = discriminator(final_pred)
 		scores_fake = scores_fake.view(-1)[~(op_mask[...,-1].view(-1)==0)]
-		valid = Variable(torch.ones_like(scores_fake), requires_grad=False).uniform_(0.8,1.0)
+		valid = Variable(torch.ones_like(scores_fake), requires_grad=False)
 		discriminator_loss = adv_loss(scores_fake, valid) 
 
-		loss = l2_loss_weight*min_ade+(1-l2_loss_weight)*discriminator_loss
+		loss = min_ade+discriminator_loss
 		if not (l==0):
 			loss = loss+l*similarity_metric 
 		loss.backward()
@@ -136,19 +149,24 @@ def generator_step(b, batch, generator, discriminator=None, optimizer_g=None, be
 	if not train: 
 		discriminator_loss=None
 	
-	return discriminator_loss,  min_ade, fde_, final_pred
+	return discriminator_loss,  min_ade, fde_, final_pred, pedestrians, first_ade
 
-def check_accuracy(loader, generator, discriminator, plot_traj=False, num_traj=1):
+def check_accuracy(loader, generator, discriminator, num_traj=1):
 	generator.eval()
 	discriminator.eval()
-	test_ade = float(0)
+	mon_ade = float(0)
+	first_ade = float(0)
 	test_fde = float(0)
 	d_loss = float(0)
+	total_peds=float(0)
 	with torch.no_grad():
 		for b, batch in enumerate(loader):
-			_, min_ade, fde, _ = generator_step(b, batch, generator, discriminator=discriminator, best_k=num_traj, train=False)
-			test_ade+=min_ade
+			_, min_ade, fde, final_pred, pedestrians, ade = generator_step(b, batch, generator, discriminator=discriminator, best_k=num_traj, train=False)
+			total_peds+=pedestrians.sum()
+			mon_ade+=min_ade
+			first_ade+=ade
 			test_fde+=fde
-		test_ade/=(b+1)
-		test_fde/=(b+1)
-	return test_ade, test_fde
+		mon_ade/=(total_peds*final_pred.size(2))
+		test_fde/=(total_peds)
+		first_ade/=(total_peds*final_pred.size(2))
+	return mon_ade, test_fde, first_ade

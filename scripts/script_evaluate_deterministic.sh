@@ -1,4 +1,4 @@
-for dset in zara1 zara2 eth univ hotel 
+for dset in univ
 do
 for p in 12
 do
@@ -8,10 +8,10 @@ python -u train_deterministic.py \
 --obs_len 8 \
 --pred_len $p \
 --delim "\t" \
---model_type spatial_temporal \
+--model_type spatial \
 --domain_parameter 2 \
 --batch_size 32 \
---eval_batch_size 32 \
+--eval_batch_size 1 \
 --delta_bearing 30 \
 --delta_heading 30 \
 --encoder_dim 32 \

@@ -33,29 +33,27 @@ class spatial_attention(nn.Module):
 		batch_size, num_pedestrians, num_pedestrians = distance_matrix.size()
 		total_peds=batch_size*num_pedestrians
 		weights = self.compute_weights(distance_matrix, bearing_matrix, heading_matrix, sequence_mask, domain)
-		weighted_hidden = torch.bmm(weights, hidden_state)
-		weighted_hidden = weighted_hidden.view(total_peds, self.attention_dim)
-		weighted_hidden = torch.cat((weighted_hidden, hidden_state.view_as(weighted_hidden)), dim=1)
+		weighted_hidden = weights @ hidden_state
+		weighted_hidden = torch.cat((weighted_hidden, hidden_state), dim=2)
 		return weighted_hidden
 	def compute_weights(self, distance_matrix, bearing_matrix, heading_matrix, sequence_mask, domain=None):
 		batch_size, num_pedestrians, num_pedestrians = distance_matrix.size()
 		total_peds=batch_size*num_pedestrians
-		mask = sequence_mask.view(-1)
 		idx1, idx2 = self.convert_to_bins(bearing_matrix, heading_matrix) 
 		if not domain is None:
 			weights=self.relu(domain[idx1, idx2]-distance_matrix)
 		else:
 			weights=self.relu(self.domain[idx1, idx2]-distance_matrix)
 		weights_mask = sequence_mask.unsqueeze(-1).expand(distance_matrix.size())
-		weights_mask = weights_mask.mul(weights_mask.transpose(1,2))
+		weights_mask = weights_mask * weights_mask.permute(0,2,1)
 		self_ped = torch.ones_like(weights)
 		self_ped[:, range(num_pedestrians), range(num_pedestrians)] = 0
-		mask = weights_mask*self_ped
-		weights=weights*mask
+		mask = weights_mask * self_ped
+		weights = weights * mask
 		weights=weights.div(weights.max(dim=2)[0].unsqueeze(-1).expand_as(weights)+(1e-14))
-		weights=weights*mask
+		weights = weights * mask
 		weights = masked_softmax(weights, dim=2)
-		weights = weights*mask
+		weights = weights * mask
 		return weights
 	def convert_to_bins(self, bearing_matrix, heading_matrix):
 		shifted_heading=(heading_matrix+(self.delta_heading/2))
@@ -72,41 +70,57 @@ class temporal_attention(nn.Module):
 		super(temporal_attention, self).__init__()
 		self.obs_len=obs_len
 		self.attention_dim=attention_dim
-		self.linear=nn.Sequential(nn.Linear(2*attention_dim, decoder_dim),nn.Tanh())
-		self.softmax=nn.Softmax(dim=1)
-		self.encoder_embedding=nn.Linear(encoder_dim, attention_dim)
-		self.decoder_embedding=nn.Linear(decoder_dim, attention_dim)
+		self.linear=nn.Sequential(nn.Linear(2*attention_dim, attention_dim),nn.Tanh())
+		self.softmax=nn.Softmax(dim=2)
+		self.encoder_embedding=nn.Linear(encoder_dim, decoder_dim, bias=False)
+		self.scaling = float(self.attention_dim)**-0.5
+		self.method='dot'
 	def compute_score(self, hidden_encoder, hidden_decoder, sequence_mask):
-		score = torch.bmm(hidden_encoder, hidden_decoder.unsqueeze(-1)).squeeze(-1)
-		score = score/(math.sqrt(self.attention_dim))
+		batch_size, num_pedestrians = list(hidden_decoder.size())[:2]
+		total_peds=batch_size*num_pedestrians
+		hidden_decoder=hidden_decoder.unsqueeze(-1)
+		score = hidden_encoder @ hidden_decoder
+		score = score.squeeze(-1)
+		score = score.div(self.scaling)
 		score  = self.softmax(score)
 		score = score*sequence_mask
 		return score
 	def forward(self, hidden_decoder, hidden_encoder, sequence_mask):
+		batch_size, num_pedestrians = list(hidden_decoder.size())[:2]
+		total_peds = batch_size*num_pedestrians
 		hidden_encoder=hidden_encoder.squeeze(2)
-		encoder_embedding=self.encoder_embedding(hidden_encoder)
-		decoder_embedding=self.decoder_embedding(hidden_decoder)
-		score=self.compute_score(encoder_embedding, decoder_embedding, sequence_mask)
-		context_vector=torch.bmm(score.unsqueeze(1), encoder_embedding).squeeze(1)
-		out = torch.cat((context_vector, decoder_embedding.view_as(context_vector)), dim=-1)
+		if hasattr(self, 'encoder_embedding'):
+			hidden_encoder=self.encoder_embedding(hidden_encoder)
+		if hasattr(self, 'decoder_embedding'):
+			hidden_decoder=self.decoder_embedding(hidden_decoder)
+		score = self.compute_score(hidden_encoder, hidden_decoder, sequence_mask)	
+		context_vector = score.unsqueeze(2) @ hidden_encoder
+		context_vector = context_vector.squeeze(2)
+		out = torch.cat((context_vector, hidden_decoder), dim=2)
 		out = self.linear(out)
 		return out, score 
-        
-class scene_attention_(nn.Module):
-	def __init__(self, model, attention_dim):
-		super(scene_attention_, self).__init__()
-		self.net = getattr(models, model)(pretrained=True)
-		self.net = nn.Sequential(*list(self.net.children())[:7])
-		self.pool = nn.AdaptiveAvgPool2d(output_size=(1,1))
-		self.fc=nn.Sequential(nn.Linear(256, attention_dim), nn.Tanh())
-		for param in self.net.parameters(): param.requires_grad=False
-		self.tanh=nn.Tanh()
-		#self.fc=nn.Sequential(nn.Linear(64, attention_dim), nn.Tanh())
-	def forward(self, ip_img):
-		features = self.net(ip_img)
-		features = self.tanh(features)
-		if hasattr(self, 'pool'): features = self.pool(features)
-		features = self.fc(features.view(features.size(0), -1))
-		return features 
+
+
+class scene_attention(nn.Module):
+	def __init__(self, embedding_dim, attention_dim):
+		super(scene_attention, self).__init__()
+		mlp_dim=512
+		self.spatial_embedding = nn.Linear(embedding_dim, attention_dim)
+		scene_model = getattr(models, 'resnet18')(pretrained=True)
+		self.scene_model = nn.Sequential(*list(scene_model.children())[:7])
+		#self.pool = nn.AdaptiveAvgPool2d(output_size=(1,1))
+		self.scene_embedding=nn.Sequential(nn.Linear(224*224, 1024), nn.ReLU(), nn.Linear(1024, mlp_dim), nn.ReLU(), nn.Linear(mlp_dim, 256), nn.ReLU())
+		#self.scene_embedding = nn.Sequential(self.scene_model, self.pool)
+		self.fc = nn.Linear(256, attention_dim)
+		#for param in self.scene_embedding[0].parameters(): param.requires_grad=False
+	def forward(self, scene, end_pos):
+		batch_size, num_pedestrians, _ = end_pos.size()
+		total_peds = batch_size*num_pedestrians
+		# batch_size, num_pedestrians, scene_size 
+		scene_features = self.scene_embedding(scene.view(-1, 224*224))
+		scene_features = self.fc(scene_features.view(batch_size, -1))
+		scene_features = scene_features.repeat(1, num_pedestrians).view(batch_size, num_pedestrians, -1)
+		scene_features = F.softmax(scene_features, dim=2)
+		return scene_features.view(total_peds, -1)
 
 

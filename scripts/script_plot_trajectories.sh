@@ -1,9 +1,9 @@
-for k in 1 5 10 20
+for k in 5 
 do
-for l in 0 0.001 0.1
+for l in 0.001 
 do
 python -u plot_trajectories.py \
---dset_name zara1 \
+--dset_name univ \
 --obs_len 8 \
 --pred_len 12 \
 --delim "\t" \
@@ -16,7 +16,7 @@ python -u plot_trajectories.py \
 --eval_batch_size 128 \
 --best_k $k  \
 --l2_loss_weight 0.5 \
---num_traj 10 \
+--num_traj 300 \
 --l $l \
 --lr_g 1e-03 \
 --lr_d 1e-03 \

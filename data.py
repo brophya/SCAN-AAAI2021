@@ -29,15 +29,17 @@ class dataset(Dataset):
 		self.samples=[]
 		self.obs_len=args.obs_len
 		self.pred_len=args.pred_len
+		self.augment_data=args.augment_data
 		self.shift=1
-		self.threshold=0.002
+		self.use_scene=False
+		if 'scene' in args.model_type:
+			self.use_scene=True
 		self.delim=args.delim
 		self.scene_contexts={}
 		pbar = tqdm(total=len(filenames), bar_format='{l_bar}{bar:50}{r_bar}{bar:-10b}')
 		for f,filename in enumerate(filenames):
 			df, means, var=self.load_data(filename)
 			self.get_sequences(df, filename, means, var)
-			#print(f"Processing scene context for {filename}")
 			self.scene_contexts[filename] = self.get_scene_context(filename) 
 			pbar.set_description(f"Processing {filename} Total Samples: {self.len}")
 			pbar.update(1)
@@ -62,9 +64,11 @@ class dataset(Dataset):
 		while not (j+self.obs_len+self.pred_len)>len(timestamps):
 			frameTimestamps=timestamps[j:j+self.obs_len+self.pred_len]
 			frame=df.loc[df['t'].isin(frameTimestamps)]
-			# use df mean, var to normalize if using scene_context in model, comment out other
-			sequence, mask, pedestrians, mean, var = self.get_sequence(frame, means, var)
-			#sequence, mask, pedestrians, mean, var = self.get_sequence(frame)
+			if self.use_scene:
+				sequence, mask, pedestrians, mean, var = self.get_sequence(frame, means, var)
+			else:
+				sequence, mask, pedestrians, mean, var = self.get_sequence(frame)
+			mean, var = torch.tensor(mean).float().unsqueeze(0), torch.tensor(var).float().unsqueeze(0)
 			if not (pedestrians.data==0).any(): 
 				self.len+=1
 				sample={}
@@ -74,26 +78,33 @@ class dataset(Dataset):
 				sample['mean']=mean
 				sample['var']=var
 				sample['fname'] = fname
-				#sample['scene_context']=scene_context
 				self.samples+=[sample]
+				if self.augment_data and not ('test' in fname) and not ('val' in fname):
+					sample = {}
+					new_sequence, new_mean, new_var = self.augment_frame(sequence, mean, var, mask)
+					if not torch.isnan(new_sequence).any():
+						new_mean, new_var = new_mean.float().unsqueeze(0), new_var.float().unsqueeze(0)
+						self.len+=1
+						sample['observation']=new_sequence
+						sample['mask']=mask
+						sample['pedestrians']=pedestrians
+						sample['mean']=new_mean
+						sample['var']=new_var 
+						sample['fname'] = fname
+						self.samples+=[sample]
 			j+=self.shift	
 	def get_scene_context(self, fname):
 		if 'crowds_zara02' in fname or 'crowds_zara03' in fname or 'crowds_zara01' in fname: scene_fname = "static_scene_context/zara1.png"
 		elif 'students' in fname or 'uni_examples' in fname:scene_fname = "static_scene_context/univ.png"
 		elif 'biwi_eth' in fname:scene_fname = "static_scene_context/eth.png"
 		elif 'biwi_hotel' in fname:scene_fname = "static_scene_context/hotel.png"
-		#print(f"Processing scene for {fname} from {scene_fname}") 
 		return preprocess_image(scene_fname)
 	def get_sequence(self,frame, means=None, var=None):
 		if means is None:
 			frame['x'] = frame['x']-frame['x'].min()
 			frame['y'] = frame['y']-frame['y'].min()
 			means = [frame['x'].mean(), frame['y'].mean()]
-		
-		#frame['x'] = frame['x']-means[0]
-		#frame['y'] = frame['y']-means[1]
 		if var is None:
-			#var = [max([abs(frame['x'].max()), abs(frame['x'].min())]), max([abs(frame['y'].max()), abs(frame['y'].min())])]
 			var = [frame['x'].max(), frame['y'].max()]
 		frame['x'] = frame['x']/var[0] 
 		frame['y'] = frame['y']/var[1] 
@@ -113,7 +124,6 @@ class dataset(Dataset):
 			pedestrianIDs=np.unique(pedestrianTraj[:,0])
 			maskPedestrian=np.ones(len(frameIDs))
 			pedestrianTraj=pedestrianTraj[:,2:]
-			pedestrianTraj=pedestrianTraj+(1e-02) 
 			sequence+=[torch.from_numpy(pedestrianTraj[:,:2].astype('float32')).unsqueeze(0)]
 			mask+=[torch.from_numpy(maskPedestrian.astype('float32')).bool().unsqueeze(0)]
 		if not sequence:
@@ -125,6 +135,26 @@ class dataset(Dataset):
 			mask = torch.stack(mask).view(-1, len(frameIDs))
 			pedestrians = torch.tensor(sequence.size(0))
 		return sequence,mask,pedestrians,means,var 
+	def augment_frame(self, frame, mean, var, mask):
+		##### Not used in AAAI version #########
+		frame = revert_orig_tensor(frame, mean, var, mask)
+		def rotate_pc(pc, alpha):
+			M = np.array([[np.cos(alpha), -np.sin(alpha)],
+					[np.sin(alpha), np.cos(alpha)]])
+			M = torch.from_numpy(M.astype('float32'))
+			return  M@pc
+		pedestrians, seq_len, _ = list(frame.size())
+		angle = np.random.choice(np.arange(0, 360, 15))
+		alpha = angle * np.pi / 180
+		for ped in range(pedestrians):
+			frame[ped,...] = rotate_pc(frame[ped,...].view(2,seq_len),alpha).view(seq_len,2) 
+		frame[...,0] = frame[...,0]-frame[...,0].min()
+		frame[...,1] = frame[...,1]-frame[...,1].min()
+		means = frame.view(-1,2).mean(dim=0)
+		var = frame.view(-1,2).max(dim=0)[0]
+		frame[...,0] = frame[...,0].div(var[0])
+		frame[...,1] = frame[...,1].div(var[1])
+		return frame, means, var 
 	def __getitem__(self,idx):
 		sample = self.samples[idx]
 		sequence, mask, pedestrians, mean, var = sample['observation'], sample['mask'], sample['pedestrians'], sample['mean'], sample['var']
@@ -132,12 +162,10 @@ class dataset(Dataset):
 		scene_context = self.scene_contexts[fname] 
 		ip=sequence[:,:self.obs_len,...]
 		op=sequence[:,self.obs_len:,...]
-		mean, var = torch.tensor(mean).float().unsqueeze(0), torch.tensor(var).float().unsqueeze(0)
 		ip_mask = mask[:,:self.obs_len]
 		op_mask = mask[:,self.obs_len].unsqueeze(-1).expand(ip_mask.size(0),self.pred_len)
 		ip_ = revert_orig_tensor(ip, mean, var, ip_mask)
-		seq_ = revert_orig_tensor(sequence, mean, var, mask)
-		dist_matrix, bearing_matrix, heading_matrix =get_features(seq_, 0, eps=0) #, mean=mean, var=var)
+		dist_matrix, bearing_matrix, heading_matrix =get_features(ip_, 0, eps=0)
 		return {'input':ip,'output':op[...,:2],'dist_matrix':dist_matrix,
 			'bearing_matrix':bearing_matrix,'heading_matrix':heading_matrix,
 			'ip_mask':ip_mask,'op_mask':op_mask,'pedestrians':pedestrians, 

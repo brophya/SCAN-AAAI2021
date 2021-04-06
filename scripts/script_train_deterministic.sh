@@ -1,12 +1,14 @@
-for dset in zara1 zara2 eth hotel univ
+for dset in eth
 do
+for model in spatial_temporal
+do
+nohup \
 python -u train_deterministic.py \
 --dset_name $dset \
 --obs_len 8 \
 --pred_len 12 \
 --delim "\t" \
---model_type spatial_temporal \
---scheduler \
+--model_type $model \
 --domain_parameter 2 \
 --batch_size 32 \
 --eval_batch_size 128 \
@@ -18,6 +20,6 @@ python -u train_deterministic.py \
 --attention_dim 32 \
 --embedding_dim 16 \
 --lr 1e-03 \
---gpu_id 3 \
---use_scene_context 
+--scheduler > log.$dset.out &
+done
 done

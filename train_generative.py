@@ -12,8 +12,10 @@ matplotlib.use("agg")
 from matplotlib import pyplot as plt 
 
 import glob
+import time
 import torch
 import csv
+import json
 import pandas as pd 
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
@@ -26,13 +28,17 @@ from generative_utils import *
 
 args = parse_arguments()
 
-seed = 1 
+#with open('generative_args.txt','w') as f:
+#	json.dump(args.__dict__, f, indent=2)
+print(args.__dict__)
+
+seed = 10 
 random.seed(seed)
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 np.random.seed(seed)
 torch.initial_seed()
-torch.set_printoptions(precision=2)
+torch.set_printoptions(precision=5)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 gpu_id = get_free_gpu().item()
@@ -50,7 +56,6 @@ if not args.test_only:
 print("TEST DATA")
 testdataset = dataset(glob.glob(f"data/{args.dset_name}/test/*.txt"), args)
 print(f"Number of Test Samples: {len(testdataset)}")
-
 print("-"*100)
 
 if not args.test_only:
@@ -69,9 +74,8 @@ if not args.test_only:
 	opt_d = torch.optim.Adam(discriminator.parameters(), lr=args.lr_d)
 
 	if args.scheduler:
-		sch_g = torch.optim.lr_scheduler.ReduceLROnPlateau(opt_g, threshold=0.01, patience=15, factor=0.5, verbose=True)
-		sch_d = torch.optim.lr_scheduler.ReduceLROnPlateau(opt_d, threshold=0.01, patience=15, factor=0.5, verbose=True)
-
+		sch_g = torch.optim.lr_scheduler.ReduceLROnPlateau(opt_g, threshold=0.01, patience=10, factor=0.5, verbose=True, min_lr=1e-04)
+		sch_d = torch.optim.lr_scheduler.ReduceLROnPlateau(opt_d, threshold=0.01, patience=10, factor=0.5, verbose=True, min_lr=1e-04)
 
 	best_loss=float(1000)
 	generator.apply(init_weights)
@@ -102,11 +106,6 @@ if args.test_only:
 	exit()
 
 
-num_iter=args.num_iter
-
-
-early_stopping=EarlyStopping()
-
 print("---- TRAINING ---->")
 
 for epoch in range(args.num_epochs):
@@ -116,34 +115,31 @@ for epoch in range(args.num_epochs):
 	g_loss_ = float(0)
 	generator.train()
 	discriminator.train()
+	epoch_time=time.time()
 	for b, batch in enumerate(trainloader):
-		if (b%num_iter)==0:
-			loss_d = discriminator_step(b, batch, generator, discriminator, opt_d, d_spatial=args.d_spatial,d_type=args.d_type, d_domain=args.d_domain)
+		loss_d = discriminator_step(b, batch, generator, discriminator, opt_d, d_spatial=args.d_spatial,d_type=args.d_type, d_domain=args.d_domain)
 		d_loss_+=loss_d.item()
-		loss_g, ade, fde, generator_pred = generator_step(b, batch, generator, discriminator=discriminator, optimizer_g=opt_g, best_k=args.best_k, l=args.l, train=True, d_spatial=args.d_spatial, l2_loss_weight=args.l2_loss_weight, clip=args.clip,d_type=args.d_type, d_domain=args.d_domain)
+		loss_g, ade, fde, generator_pred, pedestrians,_ = generator_step(b, batch, generator, discriminator=discriminator, optimizer_g=opt_g, best_k=args.best_k, l=args.l, train=True, d_spatial=args.d_spatial, l2_loss_weight=args.l2_loss_weight, clip=args.clip,d_type=args.d_type, d_domain=args.d_domain)
 		epoch_ade+=ade.item()
 		g_loss_+=loss_g.item()
+	epoch_time=time.time()-epoch_time
 	d_loss_/=(b+1)
 	g_loss_/=(b+1)
 	epoch_ade/=(b+1)
-	print(f"[Epoch: {epoch+1}/{args.num_epochs}] Train ADE: {epoch_ade:.3f} Loss_G: {g_loss_:.3f} Loss_D: {d_loss_:.3f}")
+	print(f"[Epoch: {epoch+1}/{args.num_epochs}] Train ADE: (Min over {args.best_k}): {epoch_ade:.3f} Loss_G: {g_loss_:.3f} Loss_D: {d_loss_:.3f} --- Time Per Epoch: {epoch_time:.3f}")
 	generator.eval()
 	discriminator.eval()
-	val_ade, valid_fde = check_accuracy(validloader, generator, discriminator, args.num_traj) 
-	print(f"[Epoch: {epoch+1}/{args.num_epochs}] Valid ADE: {val_ade:.3f}")
+	val_ade, valid_fde, val_ade_ = check_accuracy(validloader, generator, discriminator, args.num_traj) 
+	print(f"[Epoch: {epoch+1}/{args.num_epochs}] Valid ADE (Min over {args.num_traj}): {val_ade:.3f} (Min over 1): {val_ade_:.3f}")
 	if args.scheduler:
 		sch_g.step(val_ade)
 		sch_d.step(val_ade)
 	if (val_ade<best_loss):
 		best_loss=val_ade 
-		test_ade, test_fde = check_accuracy(testloader, generator, discriminator, args.num_traj)
+		test_ade, test_fde, test_ade_ = check_accuracy(testloader, generator, discriminator, args.num_traj)
 		torch.save(generator.state_dict(), f"{g_file}.pt")
 		torch.save(discriminator.state_dict(), f"{d_file}.pt")
-	early_stopping(val_ade)
-	if early_stopping.early_stop:
-		print("Early Stop..")
-		break
-	print(f"[Epoch: {epoch+1}/{args.num_epochs}] Test ADE: {test_ade.item():.3f} Test FDE: {test_fde.item():.3f}")
+	print(f"[Epoch: {epoch+1}/{args.num_epochs}] Test ADE (Min over {args.num_traj}): {test_ade.item():.3f} (Min over 1): {test_ade_:.3f} Test FDE: {test_fde.item():.3f}")
 	
 print("Finished Training")
 
@@ -154,7 +150,6 @@ testloader = DataLoader(testdataset, batch_size=1, collate_fn=collate_function()
 test_ade, test_fde = check_accuracy(testloader, generator, discriminator, args.num_traj)
 print(f"Test ADE: {test_ade.item():.3f}")
 print(f"Test FDE: {test_fde.item():.3f}")
-
 
 
 

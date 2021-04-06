@@ -30,15 +30,16 @@ def round_(tensor, digits=2):
 	rounded=(tensor*10**digits).round()/(10**digits)
 	return rounded
 
-def eval_metrics(pred, targets, num_peds, mask, eps=1e-14):
-    num_peds = num_peds.sum() # sum across all pedestrians in all abtches
+def eval_metrics(pred, targets, num_peds, mask, eps=1e-14, reduction='mean'):
+    num_peds = num_peds.sum()
     dist=torch.sqrt(((pred-targets)**2).sum(dim=-1)+eps) 
-    dist_final = dist[:,:,-1].view(-1) 
-    dist_final = dist_final[~(mask[:,:,-1].view(-1)==0)]
-    fde = dist_final.mean()
-    dist = dist.view(-1)
-    dist = dist[~(mask.view(-1)==0)]
-    ade = dist.mean() 
+    dist = dist*mask
+    dist_final = dist[:,:,-1]
+    fde = dist_final.sum()
+    ade = dist.sum()
+    if reduction=='mean': 
+        ade = ade.div(num_peds*pred.size(2)) 
+        fde = fde.div(num_peds)
     return ade , fde
 
 def fde(pred, targets, num_peds, eps=1e-14):
@@ -48,73 +49,92 @@ def fde(pred, targets, num_peds, eps=1e-14):
     return fde 
 
 def get_batch(batch):
+    """
+    Function to move tensors to gpu if available else cpu 
+    and add batch dimension if it doesn't exist
+    """
     batch = [t.to(device) for t in batch]
     if not len(batch[0].size())==4: batch = [t.unsqueeze(0) for t in batch]
     return batch 
 
 def preprocess_image(fname):
+    """
+    Function to preprocess scene 
+    """
     img = Image.open(fname)
     img_size=(224, 224)
     preprocess=transforms.Compose([
         transforms.Resize(256), 
         transforms.CenterCrop(img_size), 
-        transforms.ToTensor(), 
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+        transforms.functional.to_grayscale,
+	transforms.ToTensor()])
+
+        #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    #])
     img = preprocess(img)
     return img 
 
 def evaluate_model(model, testloader):
+    """
+    Function to evaluate trained model 'model' given 'testloader'
+    """
     test_ade=float(0)
     test_fde=float(0)
     model.eval()
+    total_pedestrians=float(0) 
     for b, batch in enumerate(testloader):
         pred, target,sequence, pedestrians, op_mask, _ = predict(batch,model)
-        ade_b, fde_b = eval_metrics(pred, target, pedestrians, op_mask, eps=0)
+        total_pedestrians+=pedestrians.sum() 
+        ade_b, fde_b = eval_metrics(pred, target, pedestrians, op_mask, eps=0, reduction='sum')
         test_ade+=ade_b.item()
         test_fde+=fde_b.item()
-    test_ade/=(b+1)
-    test_fde/=(b+1)
+    test_ade/=(total_pedestrians*pred.size(2))
+    test_fde/=(total_pedestrians)
     return test_ade, test_fde
 
 def predict(batch, net, domain=None):
+    """
+    Function to predict joint future trajectories for all samples in the batch
+    using model 'net'
+    """
     batch = get_batch(batch)
     sequence,target,dist_matrix,bearing_matrix,heading_matrix,\
-    ip_mask,op_mask,pedestrians, scene_context, \
-    mean, var = batch
+    ip_mask,op_mask,pedestrians, scene_context, mean, var = batch
     target_mask = op_mask.unsqueeze(-1).expand(target.size())
-    pred, encoded_op = net(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, mean, var,domain=domain)
+    pred = net(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, mean, var,domain=domain)
     pred = revert_orig_tensor(pred, mean, var, op_mask, dim=1)
     target = revert_orig_tensor(target, mean, var, op_mask, dim=1)
     sequence = revert_orig_tensor(sequence, mean, var, ip_mask, dim=1)
     return pred, target, sequence, pedestrians, op_mask, ip_mask 
 
 def normalize_tensor(tensor, mean, var, mask, dim=0):
+	"""
+	Normalizes tensor to 0,1
+	"""
 	var_ = var.unsqueeze(dim).expand_as(tensor) 
-	tensor = (tensor/var_) + (1e-02)
+	tensor=tensor/var_
 	mask_ = mask.unsqueeze(-1).expand_as(tensor) 
-	tensor.data.masked_fill_(mask=~mask_.bool(), value=float(0))
+	tensor = tensor*mask_
 	return tensor
 
 def revert_orig_tensor(tensor, mean, var, mask, dim=0):
+	"""
+	Reverts normalized tensor to original value
+	"""
 	mean_ = mean.unsqueeze(dim).expand_as(tensor)
 	var_ = var.unsqueeze(dim).expand_as(tensor)
-	tensor = (tensor-(1e-02))*var_ 
+	tensor=tensor*var_
 	mask_ = mask.unsqueeze(-1).expand_as(tensor)
-	tensor.data.masked_fill_(mask=~mask_.bool(), value=float(0))
+	tensor = tensor*mask_
 	return tensor
-	
-def predict_multiple(batch,net,num_traj, domain=None):
-    batch_size = batch[0].size(0)
-    batch = [tensor.repeat(num_traj, *np.ones(len(tensor.size()[1:])).astype('int')) for tensor in batch]
-    pred, target, sequence, pedestrians, _, _ = predict(batch,net,domain=domain)
-    predictions = pred.view(num_traj, batch_size, *pred.size()[1:]) # batch_size, num_pedestrians, pred_len, 2 
-    target = target.view(num_traj, batch_size, *target.size()[1:])
-    sequence = sequence.view(num_traj, batch_size, *sequence.size()[1:])
-    pedestrians = pedestrians.view(num_traj, batch_size, *pedestrians.size()[1:])
-    return predictions, target[0,...], sequence[0,...], pedestrians[0,...]
 
 def get_distance_matrix(sample, neighbors_dim=0, mask=None, eps=1e-14):
+    """
+    sample -> batch_size x num_pedestrians x 2 OR sequence_length x num_pedestrians x 2 
+    neighbors_dim -> dimension in sample pertaining to num_pedestrians 
+    
+    computes distance matrix -> batch_size x num_pedestrians x num_pedestrians OR sequence_length x num_pedestrians x num_pedestrians
+    """
     s, n = sample.size()[:2]
     norms=torch.sum((sample)**2,dim=-1,keepdim=True)
     norms=norms.expand(s, n, n)+norms.expand(s, n, n).transpose(1,2)
@@ -124,12 +144,31 @@ def get_distance_matrix(sample, neighbors_dim=0, mask=None, eps=1e-14):
     return distance 
 
 def mask_matrix(matrix, mask, n_dims):
+	"""
+	mask matrix given mask
+	"""
 	mask = mask.unsqueeze(-1).expand_as(matrix)
 	mask = mask.mul(mask.transpose(*n_dims))
 	matrix = matrix*mask
 	return matrix
 
 def get_features(sample, neighbors_dim, previous_sequence=None, mean=None, var=None, mask=None, eps=1e-14):
+    """
+    Returns distance matrix, relative bearing matrix, relative heading matrix
+    Given sample -> sequence_length x num_pedestrians x 2 
+    OR
+    Given sample and previous_sequence -> batch_size x num_pedestrians x 2
+
+    Given p1 at (x1, y1) and p2 at (x2, y2) at t, 
+    absolute bearing is computed as atan2(y2-y1/x2-x1) 
+
+    Given p1 at (x1, y1) at t-1 and p1 at (x2, y2) at t
+    absolute heading is computed as atan2(y2-y1/x2-x1)
+
+    relative bearing is computed as the difference between absolute bearing and heading of p1
+
+    relative heading is computed as the difference between heading of p2 and heading of p1 
+    """
     if not (mean is None) and not (var is None):
         mean, var = mean.unsqueeze(neighbors_dim).expand_as(sample), var.unsqueeze(neighbors_dim).expand_as(sample)
         sample = (sample)*var+mean
@@ -176,18 +215,22 @@ def get_features(sample, neighbors_dim, previous_sequence=None, mean=None, var=N
     return distance, bearing, heading
 
 def get_heading(sample, prev_sample=None, mask=None):
+    """
+    Computes heading matrix
+    """
     n=sample.size(1)
     diff=torch.zeros_like(sample)
     if prev_sample is None:
         if (len(sample.size())==3): 
             diff[1:,...]=sample[1:,...]-sample[:-1,...]
+            diff[0,...] = 2*math.pi*torch.rand(diff[0,...].size()).to(sample.device)+math.pi
             diff[0,...]=diff[1,...]
         elif (len(sample.size())==4):
             diff[:,:,1:,...] = sample[:,:,1:,...]-sample[:,:,:-1,...]
             diff[:,:,0,...] = diff[:,:,1,...]
     else:
         diff=sample-prev_sample # y - y', x - x' (own displacement)
-    heading = rad2deg * torch.atan2(diff[...,1],diff[...,0]) # absolute heading
+    heading = rad2deg * torch.atan2(diff[...,1],diff[...,0]) #+(1e-14)) # absolute heading
     return heading 
 
 def plot_domain(model, plot_file, delta_heading, delta_bearing):
@@ -260,6 +303,9 @@ def get_free_gpu():
 	return np.argmax(memory_available) 
 
 def init_weights(m):
+    """
+    initializes all weights in all linear layers to xavier normal initialization 
+    """
     classname = m.__class__.__name__
     if classname.find('Linear') != -1: nn.init.xavier_normal_(m.weight)
 
@@ -281,42 +327,5 @@ class EarlyStopping:
 			self.best_score=score
 			self.counter=0
 
-def plot_grad_flow(named_parameters):
-	ave_grads=[]
-	max_grads=[]
-	layers=[]
-	plt.rcParams['xtick.labelsize']=3
-	for n, p in named_parameters:
-		if (p.requires_grad) and ("bias" not in n):
-			if p.grad is None:
-				print(f"{n} has None grad!")
-				continue
-			layers.append(n)
-			ave_grads.append(p.grad.abs().mean())
-			print(n, p.grad.abs().max())
-			max_grads.append(p.grad.abs().max())
-	plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
-	plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
-	plt.hlines(0, 0, len(ave_grads)+1, lw=2, color="k")
-	plt.xticks(range(0, len(ave_grads), 1), layers)
-	plt.xlim(left=0, right=len(ave_grads))
-	plt.ylim(bottom = -0.001, top=0.02)
-	plt.xlabel("Layers")
-	plt.ylabel("average gradient")
-	plt.title("Gradient flow")
-	plt.grid(True)
-	plt.legend([Line2D([0], [0], color="c", lw=4),
-	                Line2D([0], [0], color="b", lw=4),
-			                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
-	plt.savefig("gradient_flow.png")
-
-def log_results(fname, logger):
-	writeheader=True
-	if os.path.exists(fname): writeheader=False
-	f = open(fname, 'a')
-	w = csv.DictWriter(f, logger.keys())
-	if writeheader: w.writeheader()
-	w.writerow(logger)
-	f.close()
 
 
