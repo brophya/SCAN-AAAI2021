@@ -1,6 +1,5 @@
 import torch
 import random
-import time
 
 from utils import *
 
@@ -34,11 +33,11 @@ def traj_similarity(predictions, mask, eps=1e-16, k=1):
 		if not (mask_t==0).all():
 			valid_trajs+=1
 			mask_t = mask_t.unsqueeze(-1).unsqueeze(-1).expand(prediction_length, best_k, best_k)
-			mask_t = mask_t*mask_t.transpose(1,2)
+			mask_t = mask_t * mask_t.transpose(1,2)
 			pred = predictions[t,...] # 1 x num_traj x prediction_length x feature_size
 			dist = get_distance_matrix(pred.transpose(0,1), neighbors_dim=1) 
 			s = torch.exp(-dist+eps) 
-			s = s*mask_t
+			s = s * mask_t
 			s[:, range(best_k), range(best_k)] = 0
 			s = s.sum()
 			similarity_score.append(s)

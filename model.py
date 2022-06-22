@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F 
+
 from torch.autograd import Variable
 from attention import *
 from utils import *
@@ -51,8 +51,7 @@ class TrajectoryGenerator(nn.Module):
 		
 		if ('spatial' in self.model_type):
 			self.spatial_attention=spatial_attention(delta_bearing, delta_heading, domain_parameter, attention_dim)
-			if ('scene' in self.model_type): n=3
-			else: n=2
+			n=2
 			self.decoder_spatial_embedding=nn.Sequential(nn.Linear(n*attention_dim, attention_dim), nn.Tanh())
 			self.encoder_spatial_embedding=nn.Sequential(nn.Linear(n*attention_dim, attention_dim), nn.Tanh())
 
@@ -83,9 +82,7 @@ class TrajectoryGenerator(nn.Module):
 		if not (encoder_dim==decoder_dim):
 			self.enc2dec = nn.Linear(encoder_dim, decoder_dim)
 
-		if ('scene' in self.model_type):
-			self.scene_attention=scene_attention(embedding_dim, attention_dim) 
-			self.scene_embedding = nn.Linear(2*attention_dim, encoder_dim) 
+		
 	def init_states(self, total_peds, hidden_dim):
 		h_t = Variable(torch.zeros(total_peds, hidden_dim).to(self.device), requires_grad=True)
 		c_t = Variable(torch.zeros(1, total_peds, hidden_dim).to(self.device), requires_grad=True)
@@ -109,9 +106,7 @@ class TrajectoryGenerator(nn.Module):
 				if hasattr(self, 'enc2att'): h_t = self.enc2att(h_t) 
 				if hasattr(self, 'act'): h_t=self.act(h_t)
 				h_t = self.spatial_attention(h_t, dmat[:,:,i,:], bmat[:,:,i,:], hmat[:,:,i,:], mask[:,:,i], domain=domain)
-				if ('scene' in self.model_type):
-					h_t_scene = self.attend_to_scene(x_i, h_t, scene)
-					h_t = torch.cat([h_t, h_t_scene], dim=1)
+				
 				h_t = self.encoder_spatial_embedding(h_t) 
 				if hasattr(self, 'att2enc'):h_t = self.att2enc(h_t)
 				if hasattr(self, 'act'): h_t=self.act(h_t)
@@ -144,9 +139,7 @@ class TrajectoryGenerator(nn.Module):
 				if hasattr(self, 'dec2att'): h_t=self.dec2att(h_t) 
 				if hasattr(self, 'act'): h_t=self.act(h_t)
 				h_t=self.spatial_attention(h_t,distance_matrix,bearing_matrix,heading_matrix,output_mask[:,:,j],domain=domain)
-				if ('scene' in self.model_type):
-					h_t_scene = self.attend_to_scene(embedded_x, h_t, scene)
-					h_t = torch.cat([h_t, h_t_scene], dim=1)
+				
 				h_t=self.decoder_spatial_embedding(h_t) 
 				if hasattr(self, 'att2dec'): h_t=self.att2dec(h_t) 
 				if hasattr(self, 'act'): h_t=self.act(h_t)

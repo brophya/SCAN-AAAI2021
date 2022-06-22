@@ -7,29 +7,22 @@ sys.dont_write_bytecode=True
 import warnings
 warnings.filterwarnings("ignore")
 
-import matplotlib
-matplotlib.use("agg")
-from matplotlib import pyplot as plt 
-
 import glob
 import time
 import torch
-import csv
-import json
-import pandas as pd 
-from torch.autograd import Variable
-from torch.utils.data import Dataset, DataLoader
-from termcolor import colored
+import random
 
-from arguments import *
-from model import *
-from data import *
-from generative_utils import *
+from torch.utils.data import DataLoader
+
+from arguments import parse_arguments
+from model import TrajectoryGenerator, TrajectoryDiscriminator
+from data import dataset, collate_function
+from generative_utils import discriminator_step, generator_step, check_accuracy
+
+from utils import * 
 
 args = parse_arguments()
 
-#with open('generative_args.txt','w') as f:
-#	json.dump(args.__dict__, f, indent=2)
 print(args.__dict__)
 
 seed = 10 

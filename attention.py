@@ -1,7 +1,5 @@
 import torch
-import torchvision
-import torchvision.models as models
-import torchvision.transforms as transforms 
+
 import torch.nn as nn
 import torch.nn.functional as F 
 from torch.autograd import Variable
@@ -101,26 +99,5 @@ class temporal_attention(nn.Module):
 		return out, score 
 
 
-class scene_attention(nn.Module):
-	def __init__(self, embedding_dim, attention_dim):
-		super(scene_attention, self).__init__()
-		mlp_dim=512
-		self.spatial_embedding = nn.Linear(embedding_dim, attention_dim)
-		scene_model = getattr(models, 'resnet18')(pretrained=True)
-		self.scene_model = nn.Sequential(*list(scene_model.children())[:7])
-		#self.pool = nn.AdaptiveAvgPool2d(output_size=(1,1))
-		self.scene_embedding=nn.Sequential(nn.Linear(224*224, 1024), nn.ReLU(), nn.Linear(1024, mlp_dim), nn.ReLU(), nn.Linear(mlp_dim, 256), nn.ReLU())
-		#self.scene_embedding = nn.Sequential(self.scene_model, self.pool)
-		self.fc = nn.Linear(256, attention_dim)
-		#for param in self.scene_embedding[0].parameters(): param.requires_grad=False
-	def forward(self, scene, end_pos):
-		batch_size, num_pedestrians, _ = end_pos.size()
-		total_peds = batch_size*num_pedestrians
-		# batch_size, num_pedestrians, scene_size 
-		scene_features = self.scene_embedding(scene.view(-1, 224*224))
-		scene_features = self.fc(scene_features.view(batch_size, -1))
-		scene_features = scene_features.repeat(1, num_pedestrians).view(batch_size, num_pedestrians, -1)
-		scene_features = F.softmax(scene_features, dim=2)
-		return scene_features.view(total_peds, -1)
 
 

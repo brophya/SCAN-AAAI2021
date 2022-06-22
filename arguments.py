@@ -12,10 +12,8 @@ def parse_arguments():
     parser.add_argument('--augment_data', action='store_true', help="augment data by rotating frames randomly")
 
     # Model Parameters
-    parser.add_argument('--model_type', type=str, default="spatial_temporal",choices=['vanilla', 'spatial', 'gat_spatial_temporal',\
-    								'temporal', 'spatial_temporal', 'generative_vanilla', \
-								'generative_spatial', 'generative_spatial_temporal', \
-								'scene_vanilla', 'scene_spatial', 'scene_spatial_temporal', 'scene_generative_spatial_temporal'])
+    parser.add_argument('--model_type', type=str, default="spatial_temporal",choices=['vanilla', 'spatial', 'spatial_temporal', 'generative_vanilla', \
+								'generative_spatial', 'generative_spatial_temporal'])
     parser.add_argument('--encoder_dim', type=int, default=32, help="encoder LSTM dimensions")
     parser.add_argument('--decoder_dim', type=int, default=32, help="decoder LSTM dimensions")
     parser.add_argument('--embedding_dim', type=int, default=16, help="input embedding dimensions")

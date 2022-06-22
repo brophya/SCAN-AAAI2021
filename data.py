@@ -1,18 +1,16 @@
 from __future__ import print_function
 import sys
 sys.dont_write_bytecode=True
-import torch
-import pickle
-from torch.utils.data import Dataset,DataLoader
-import torchvision.transforms as transforms
+
+from tqdm import tqdm 
 import pandas as pd 
 import numpy as np 
+
+import torch
+
+from torch.utils.data import Dataset
+
 from utils import *
-from multiprocessing import Process
-import time
-import random
-from tqdm import tqdm
-from termcolor import colored
 
 device=torch.device("cuda" if torch.cuda.is_available else "cpu")
 

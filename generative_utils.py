@@ -2,10 +2,10 @@ from __future__ import print_function
 
 import torch
 import torch.nn as nn
+from torch.autograd import Variable
 
-from model import *
 from utils import *
-from losses import *
+from losses import traj_similarity
 
 adv_loss = nn.BCELoss()
 

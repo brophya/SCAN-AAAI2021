@@ -7,22 +7,18 @@ sys.dont_write_bytecode=True
 import warnings
 warnings.filterwarnings("ignore")
 
-import matplotlib
-matplotlib.use("agg")
-from matplotlib import pyplot as plt 
-
 import glob
+import numpy as np 
+import random
+
 import torch
-import csv
-import pandas as pd 
-from torch.autograd import Variable
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-from termcolor import colored
-from tqdm import tqdm 
-from arguments import *
-from model import *
-from data import *
+
+from torch.utils.data import DataLoader
+from arguments import parse_arguments
+from model import TrajectoryGenerator
+from data import dataset, collate_function
+
+from utils import * 
 
 args = parse_arguments()
 print(args.__dict__)
@@ -37,8 +33,9 @@ torch.initial_seed()
 torch.set_printoptions(precision=2)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-gpu_id = get_free_gpu().item()
-torch.cuda.set_device(gpu_id)
+if torch.cuda.is_available():
+	gpu_id = get_free_gpu().item()
+	torch.cuda.set_device(gpu_id)
 
 if not args.test_only:
 	print("TRAINING DATA")
@@ -76,11 +73,11 @@ if not os.path.exists(f"./trained-models/{args.model_type}"):
 	os.makedirs(f"./trained-models/{args.model_type}")
 
 if args.train_saved:
-	model.load_state_dict(torch.load(f"{model_file}.pt"))
+	model.load_state_dict(torch.load(f"{model_file}.pt", map_location=device))
 
 if args.test_only:
 	print("Evaluating trained model")
-	model.load_state_dict(torch.load(f"{model_file}.pt"))
+	model.load_state_dict(torch.load(f"{model_file}.pt", map_location=device))
 	testloader = DataLoader(testdataset, batch_size=args.eval_batch_size, collate_fn=collate_function(),  shuffle=False)
 	test_ade, test_fde = evaluate_model(model, testloader)
 	print(f"Test ADE: {test_ade:.3f}")

@@ -17,7 +17,6 @@ python -u train_deterministic.py \
 --encoder_dim 32 \
 --decoder_dim 32 \
 --attention_dim 32 \
---embedding_dim 16 \
---use_scene_context 
+--embedding_dim 16 
 done
 done
