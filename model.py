@@ -180,7 +180,7 @@ class TrajectoryGenerator(nn.Module):
 		else:
 			h_t=z 
 		return h_t 
-	def forward(self, x, pedestrians, dmat, bmat, hmat, input_mask, output_mask, scene, mean=None, var=None, domain=None):
+	def forward(self, x, pedestrians, dmat, bmat, hmat, input_mask, output_mask, scene=None, mean=None, var=None, domain=None):
 		batch_size, num_pedestrians = x.size()[:2]
 		final_h, encoded_input = self.encode(x, dmat, bmat, hmat, input_mask, mean, var, scene, domain=domain)
 		if ('generative' in self.model_type):

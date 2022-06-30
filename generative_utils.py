@@ -14,8 +14,8 @@ def discriminator_step(b, batch, generator, discriminator, optimizer_d, d_spatia
 	optimizer_d.zero_grad()
 
 	batch = get_batch(batch)
-	sequence,target,dist_matrix,bearing_matrix,heading_matrix,ip_mask, op_mask, pedestrians, scene_context, batch_mean, batch_var = batch
-	prediction = generator(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, batch_mean, batch_var) 
+	sequence,target,dist_matrix,bearing_matrix,heading_matrix,ip_mask, op_mask, pedestrians, batch_mean, batch_var = batch
+	prediction = generator(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, batch_mean, batch_var) 
 	prediction = revert_orig_tensor(prediction, batch_mean, batch_var, op_mask, dim=1)    
 	target = revert_orig_tensor(target, batch_mean, batch_var, op_mask, dim=1)
 
@@ -89,13 +89,13 @@ def generator_step(b, batch, generator, discriminator=None, optimizer_g=None, be
 		reduction='mean'
 	min_ade=float(np.inf) 
 	batch = get_batch(batch)
-	sequence,target,dist_matrix,bearing_matrix,heading_matrix,ip_mask, op_mask, pedestrians, scene_context, batch_mean, batch_var = batch
+	sequence,target,dist_matrix,bearing_matrix,heading_matrix,ip_mask, op_mask, pedestrians, batch_mean, batch_var = batch
 	batch_size=sequence.size(0)
 	target_mask = op_mask.unsqueeze(-1).expand(target.size())
 	predictions = []
 	target = revert_orig_tensor(target, batch_mean, batch_var, op_mask, dim=1)  
 	for k in range(best_k):
-		prediction = generator(sequence, pedestrians, dist_matrix, bearing_matrix, heading_matrix, ip_mask, op_mask, scene_context, batch_mean, batch_var) 
+		prediction = generator(sequence, pedestrians, dist_matrix, bearing_matrix, heading_matrix, ip_mask, op_mask, batch_mean, batch_var) 
 		prediction = revert_orig_tensor(prediction, batch_mean, batch_var, op_mask, dim=1) 
 		ade_g, fde_g = eval_metrics(prediction, target, pedestrians, op_mask,eps=eps, reduction=reduction)
 		predictions+=[prediction]

@@ -33,12 +33,10 @@ class dataset(Dataset):
 		if 'scene' in args.model_type:
 			self.use_scene=True
 		self.delim=args.delim
-		self.scene_contexts={}
 		pbar = tqdm(total=len(filenames), bar_format='{l_bar}{bar:50}{r_bar}{bar:-10b}')
 		for f,filename in enumerate(filenames):
 			df, means, var=self.load_data(filename)
 			self.get_sequences(df, filename, means, var)
-			self.scene_contexts[filename] = self.get_scene_context(filename) 
 			pbar.set_description(f"Processing {filename} Total Samples: {self.len}")
 			pbar.update(1)
 		pbar.close()
@@ -91,12 +89,6 @@ class dataset(Dataset):
 						sample['fname'] = fname
 						self.samples+=[sample]
 			j+=self.shift	
-	def get_scene_context(self, fname):
-		if 'crowds_zara02' in fname or 'crowds_zara03' in fname or 'crowds_zara01' in fname: scene_fname = "static_scene_context/zara1.png"
-		elif 'students' in fname or 'uni_examples' in fname:scene_fname = "static_scene_context/univ.png"
-		elif 'biwi_eth' in fname:scene_fname = "static_scene_context/eth.png"
-		elif 'biwi_hotel' in fname:scene_fname = "static_scene_context/hotel.png"
-		return preprocess_image(scene_fname)
 	def get_sequence(self,frame, means=None, var=None):
 		if means is None:
 			frame['x'] = frame['x']-frame['x'].min()
@@ -157,7 +149,6 @@ class dataset(Dataset):
 		sample = self.samples[idx]
 		sequence, mask, pedestrians, mean, var = sample['observation'], sample['mask'], sample['pedestrians'], sample['mean'], sample['var']
 		fname = sample['fname']
-		scene_context = self.scene_contexts[fname] 
 		ip=sequence[:,:self.obs_len,...]
 		op=sequence[:,self.obs_len:,...]
 		ip_mask = mask[:,:self.obs_len]
@@ -167,7 +158,6 @@ class dataset(Dataset):
 		return {'input':ip,'output':op[...,:2],'dist_matrix':dist_matrix,
 			'bearing_matrix':bearing_matrix,'heading_matrix':heading_matrix,
 			'ip_mask':ip_mask,'op_mask':op_mask,'pedestrians':pedestrians, 
-			'scene_context': scene_context, 
 			'mean': mean, 'var': var}
 
 
@@ -204,7 +194,7 @@ class collate_function(object):
 		_len = max([b['pedestrians'].data for b in batch])
 		output_batch = []
 		for f in features:
-			if ('pedestrians' in f) or ('mean' in f) or ('var' in f) or ('scene_context' in f):
+			if ('pedestrians' in f) or ('mean' in f) or ('var' in f):
 				output_feature=torch.stack([b[f] for b in batch])
 			else:
 				output_feature = pad_sequence([b[f] for b in batch],f,_len)

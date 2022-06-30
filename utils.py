@@ -94,9 +94,9 @@ def predict(batch, net, domain=None):
     """
     batch = get_batch(batch)
     sequence,target,dist_matrix,bearing_matrix,heading_matrix,\
-    ip_mask,op_mask,pedestrians, scene_context, mean, var = batch
+    ip_mask,op_mask,pedestrians, mean, var = batch
     target_mask = op_mask.unsqueeze(-1).expand(target.size())
-    pred = net(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene_context, mean, var,domain=domain)
+    pred = net(sequence, pedestrians, dist_matrix,bearing_matrix,heading_matrix,ip_mask,op_mask, scene=None, mean=mean, var=var, domain=domain)
     pred = revert_orig_tensor(pred, mean, var, op_mask, dim=1)
     target = revert_orig_tensor(target, mean, var, op_mask, dim=1)
     sequence = revert_orig_tensor(sequence, mean, var, ip_mask, dim=1)
