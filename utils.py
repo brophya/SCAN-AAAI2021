@@ -79,6 +79,11 @@ def evaluate_model(model, testloader):
     total_pedestrians=float(0) 
     for b, batch in enumerate(testloader):
         pred, target,sequence, pedestrians, op_mask, _ = predict(batch,model)
+        # ---------- INFERENCE ---------------------------
+        # pred: is the variable corresponding to model prediction with size (batch_size, num_pedestrians, prediction_length, 2)
+        # at inference, batch size is typically 1, the variable corresponds to (x, y) predictions over `prediction_length'
+        # timestamps for 'num_pedestrians' pedestrians. 
+        # --------------------------------------------------
         total_pedestrians+=pedestrians.sum() 
         ade_b, fde_b = eval_metrics(pred, target, pedestrians, op_mask, eps=0, reduction='sum')
         test_ade+=ade_b.item()

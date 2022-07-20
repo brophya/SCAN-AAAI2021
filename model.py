@@ -219,8 +219,8 @@ class TrajectoryDiscriminator(nn.Module):
 
 		self.sigmoid=nn.Sigmoid()
 	def init_hidden(self, total_peds):
-		return (Variable(torch.zeros(self.num_layers, total_peds, self.hidden_size), requires_grad=True).cuda(), 
-			Variable(torch.zeros(self.num_layers, total_peds, self.hidden_size), requires_grad=True).cuda()
+		return (Variable(torch.zeros(self.num_layers, total_peds, self.hidden_size), requires_grad=True), 
+			Variable(torch.zeros(self.num_layers, total_peds, self.hidden_size), requires_grad=True)
 			)
 	def forward(self, x, dmat=None, bmat=None, hmat=None, mask=None, domain=None):
 		x = self.embedding(x)

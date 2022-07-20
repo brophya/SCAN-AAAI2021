@@ -34,8 +34,9 @@ torch.initial_seed()
 torch.set_printoptions(precision=5)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-gpu_id = get_free_gpu().item()
-torch.cuda.set_device(gpu_id)
+if torch.cuda.is_available():
+	gpu_id = get_free_gpu().item()
+	torch.cuda.set_device(gpu_id)
 
 
 if not args.test_only:

@@ -1,6 +1,6 @@
 for k in 5
 do
-for lambda in 0.001
+for lambda in 0
 do
 for dset in univ
 do
