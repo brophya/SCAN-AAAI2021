@@ -141,10 +141,10 @@ print("Evaluating Trained Model")
 generator.load_state_dict(torch.load(f"{g_file}.pt"))
 discriminator.load_state_dict(torch.load(f"{d_file}.pt"))
 testloader = DataLoader(testdataset, batch_size=1, collate_fn=collate_function(), shuffle=False)
-test_ade, test_fde = check_accuracy(testloader, generator, discriminator, args.num_traj)
+test_ade, test_fde, new_ade = check_accuracy(testloader, generator, discriminator, args.num_traj)
 print(f"Test ADE: {test_ade.item():.3f}")
 print(f"Test FDE: {test_fde.item():.3f}")
-
+print(f"New ADE: {new_ade.item():.3f}")
 
 
 
