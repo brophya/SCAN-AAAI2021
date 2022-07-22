@@ -8,7 +8,7 @@ do
 #nohup \
 python -u \
 train_generative.py \
---dset_name hotel \
+--dset_name zara1 \
 --obs_len 8 \
 --pred_len 12 \
 --delim "\t" \

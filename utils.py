@@ -302,7 +302,7 @@ def get_free_gpu():
 	# os.system("rm -r tmp")
 	return np.argmax(memory_available)
 
-dprint(f"Test ADE: {test_ade.item():.3f}")f init_weights(m):
+def init_weights(m):
     """
     initializes all weights in all linear layers to xavier normal initialization 
     """
