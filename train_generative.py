@@ -46,10 +46,10 @@ np.random.seed(seed)
 torch.initial_seed()
 torch.set_printoptions(precision=5)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+"""device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available():
 	gpu_id = get_free_gpu().item()
-	torch.cuda.set_device(gpu_id)
+	torch.cuda.set_device(gpu_id)"""
 
 
 if not args.test_only:
