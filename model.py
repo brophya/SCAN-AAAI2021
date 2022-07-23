@@ -219,8 +219,8 @@ class TrajectoryDiscriminator(nn.Module):
 
 		self.sigmoid=nn.Sigmoid()
 	def init_hidden(self, total_peds):
-		return (Variable(torch.zeros(self.num_layers, total_peds, self.hidden_size), requires_grad=True), 
-			Variable(torch.zeros(self.num_layers, total_peds, self.hidden_size), requires_grad=True)
+		return (Variable(torch.zeros(self.num_layers, total_peds, self.hidden_size).to("cuda:0"), requires_grad=True),
+			Variable(torch.zeros(self.num_layers, total_peds, self.hidden_size).to("cuda:0"), requires_grad=True)
 			)
 	def forward(self, x, dmat=None, bmat=None, hmat=None, mask=None, domain=None):
 		x = self.embedding(x)
@@ -247,9 +247,10 @@ class TrajectoryDiscriminator(nn.Module):
 			elif hasattr(self, 'fc'):
 				h_t = self.fc(x.view(batch_size, num_pedestrians, self.embedding_dim*self.seq_len))
 		
-		encoded_input=torch.cat(encoded_input, 2).view(batch_size, num_pedestrians, self.seq_len*self.hidden_size)
+		encoded_input=torch.cat(encoded_input, 2).view(batch_size, num_pedestrians, self.seq_len*self.hidden_size).to("cuda:0")
 		scores = self.classifier(encoded_input)
 		scores = self.sigmoid(scores)
-		return scores 
+		return scores
+
 
 
