@@ -2,7 +2,7 @@ for dset in zara1 zara2 hotel eth univ
 do
 python -u train_generative.py \
 --test_only \
---dset_name $dset \
+--dset_name univ \
 --obs_len 8 \
 --pred_len 12 \
 --delim "\t" \
