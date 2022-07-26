@@ -8,7 +8,7 @@ do
 #nohup \
 python -u \
 train_generative.py \
---dset_name eth \
+--dset_name hotel \
 --obs_len 8 \
 --pred_len 12 \
 --delim "\t" \
